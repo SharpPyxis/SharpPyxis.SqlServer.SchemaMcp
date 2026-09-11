@@ -1,0 +1,5 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SharpPyxis.SqlServer.SchemaMcp/SharpPyxis.SqlServer.SchemaMcp.csproj" />
+  </Folder>
+</Solution>
