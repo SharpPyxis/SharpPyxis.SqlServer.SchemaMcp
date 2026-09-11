@@ -1,0 +1,1 @@
+# SharpPyxis.SqlServer.SchemaMcp

@@ -1,0 +1,39 @@
+# .gitignore of a code repository.
+#
+# This file is the reference on the versioned / local boundary — a folder's name decides nothing,
+# only this file does. Every entry, or group of entries, says why it is here.
+#
+# ⚠ Build artefacts are deliberately absent. The test for an ignore rule is not whether it is
+# anchored but whether it can ever be **wrong**, and a rule posted in advance for a stack this
+# repository does not yet use is a decision taken about cases nobody has seen. Observed: a `dist/`
+# rule, added to an empty section, silently swallowed a vendored library folder several levels
+# down — nothing failed, nothing was reported, and the clone on the other side would simply not
+# have built. Add each rule when its artefact appears, anchored to where it appears.
+#
+# The costs are not symmetric: a file wrongly ignored is invisible, a file wrongly tracked is
+# obvious immediately.
+
+# ── Editor tooling ─────────────────────────────────────────────────────────────
+# Machine-local settings. The editor workspace file lives at the corpus root and belongs to no
+# repository.
+.vs/
+.vscode/
+.idea/
+*.code-workspace
+
+# ── Temporary files ────────────────────────────────────────────────────────────
+~$*
+*.tmp
+*.bak
+*.swp
+*~
+
+# ── System ─────────────────────────────────────────────────────────────────────
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ── Local, unshared work ───────────────────────────────────────────────────────
+# Scratch files and throwaway experiments. The folder exists so there is somewhere to put one
+# without wondering whether it should be versioned: by construction, the answer is no.
+_local/

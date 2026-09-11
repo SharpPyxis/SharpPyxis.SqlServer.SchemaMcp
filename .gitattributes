@@ -1,0 +1,8 @@
+# Line endings: LF everywhere, imposed at checkout whatever the cloning machine is configured
+# to do. Without this file a clone on Windows rewrites every line as CRLF, and the next commit
+# shows thousands of phantom diff lines.
+* text=auto eol=lf
+
+# Exception: Windows command scripts require CRLF to be interpreted correctly.
+*.bat text eol=crlf
+*.cmd text eol=crlf
