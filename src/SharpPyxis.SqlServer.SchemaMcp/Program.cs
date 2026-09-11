@@ -8,11 +8,13 @@ var builder = Host.CreateApplicationBuilder(args);
 // stdout belongs to the MCP protocol: every log goes to stderr.
 builder.Logging.AddConsole(options => options.LogToStandardErrorThreshold = LogLevel.Trace);
 
-builder.Services.AddSingleton(SchemaSettings.FromEnvironment());
+var settings = SchemaSettings.FromEnvironment();
 
 builder.Services
-    .AddMcpServer()
+    .AddMcpServer(options => options.ServerInstructions =
+        $"Read-only access to the DDL of one SQL Server schema: {settings.Target}. "
+        + "It returns object definitions only, never data, and cannot reach any other schema.")
     .WithStdioServerTransport()
-    .WithToolsFromAssembly();
+    .WithTools(new SchemaTools(settings).CreateTools());
 
 await builder.Build().RunAsync();

@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Data;
+using System.Reflection;
 using System.Text;
 using Microsoft.Data.SqlClient;
 using Microsoft.SqlServer.Management.Common;
@@ -9,17 +10,34 @@ using ModelContextProtocol.Server;
 namespace SharpPyxis.SqlServer.SchemaMcp;
 
 /// <summary>
-/// Two read-only tools with fixed queries. No tool accepts free SQL.
+/// Two read-only tools with fixed queries, bound to one target at startup. No tool accepts free SQL.
 /// </summary>
-[McpServerToolType]
-internal static class SchemaTools
+internal sealed class SchemaTools(SchemaSettings settings)
 {
+    /// <summary>
+    /// Builds the tools with the target appended to each description. A client that runs several
+    /// instances of this server shows the model one set of tools per target, and the description is
+    /// what tells them apart.
+    /// </summary>
+    public IEnumerable<McpServerTool> CreateTools() =>
+        [CreateTool(nameof(ListObjects)), CreateTool(nameof(ScriptObject))];
+
+    private McpServerTool CreateTool(string methodName)
+    {
+        var method = typeof(SchemaTools).GetMethod(methodName)!;
+        var description = method.GetCustomAttribute<DescriptionAttribute>()!.Description;
+
+        return McpServerTool.Create(method, this, new McpServerToolCreateOptions
+        {
+            Description = $"{description} Target: {settings.Target}.",
+        });
+    }
+
     /// <summary>Lists the objects of the configured schema, optionally filtered on their last change.</summary>
     [McpServerTool(Name = "list_objects", ReadOnly = true, Idempotent = true)]
     [Description("Lists the tables, views, procedures, functions and sequences of the configured schema, "
                + "with their last modification date. Optional filter on that date.")]
-    public static async Task<string> ListObjects(
-        SchemaSettings settings,
+    public async Task<string> ListObjects(
         [Description("Only return objects modified since this date (ISO 8601). Optional.")]
         DateTime? modifiedSince = null,
         CancellationToken cancellationToken = default)
@@ -53,8 +71,7 @@ internal static class SchemaTools
     [McpServerTool(Name = "script_object", ReadOnly = true, Idempotent = true)]
     [Description("Returns the complete CREATE script of an object of the configured schema, as SSMS generates it: "
                + "tables with constraints, indexes and triggers; views, procedures and functions with their original text.")]
-    public static string ScriptObject(
-        SchemaSettings settings,
+    public string ScriptObject(
         [Description("Object name, without the schema prefix.")] string objectName)
     {
         using var sqlConnection = new SqlConnection(settings.ConnectionString);
