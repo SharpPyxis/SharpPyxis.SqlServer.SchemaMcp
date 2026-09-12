@@ -56,7 +56,8 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         List<McpServerTool> tools =
         [
             CreateTool(nameof(UseConnection)), CreateTool(nameof(ServerInfo)),
-            CreateTool(nameof(ListObjects)), CreateTool(nameof(ScriptObject)), CreateTool(nameof(FindReferences)),
+            CreateTool(nameof(ListObjects)), CreateTool(nameof(DescribeObject)), CreateTool(nameof(ScriptObject)),
+            CreateTool(nameof(FindReferences)),
             CreateTool(nameof(SearchModules)), CreateTool(nameof(FindColumns)),
         ];
 
@@ -993,6 +994,232 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         "datetime2" or "datetimeoffset" or "time" => $"{type}({scale})",
         _ => type,
     };
+
+    // One batch, one result set per part of the description. Column lists are assembled in C# rather
+    // than with STRING_AGG, which older instances do not have.
+    private const string DescribeQuery = """
+        declare @id int = object_id(quotename(@targetSchema) + N'.' + quotename(@targetName));
+
+        select o.type_desc,
+               (select sum(p.rows) from sys.partitions as p where p.object_id = o.object_id and p.index_id in (0, 1)),
+               cast(ep.value as nvarchar(4000))
+        from sys.objects as o
+        left join sys.extended_properties as ep
+               on @descriptions = 1 and ep.class = 1 and ep.major_id = o.object_id and ep.minor_id = 0
+              and ep.name = N'MS_Description'
+        where o.object_id = @id;
+
+        select c.name, type_name(c.user_type_id), c.max_length, c.precision, c.scale, c.is_nullable,
+               cast(ic.seed_value as nvarchar(40)), cast(ic.increment_value as nvarchar(40)),
+               dc.definition, cc.definition, cast(ep.value as nvarchar(4000))
+        from sys.columns as c
+        left join sys.identity_columns as ic on ic.object_id = c.object_id and ic.column_id = c.column_id
+        left join sys.default_constraints as dc on dc.object_id = c.default_object_id
+        left join sys.computed_columns as cc on cc.object_id = c.object_id and cc.column_id = c.column_id
+        left join sys.extended_properties as ep
+               on @descriptions = 1 and ep.class = 1 and ep.major_id = c.object_id and ep.minor_id = c.column_id
+              and ep.name = N'MS_Description'
+        where c.object_id = @id
+        order by c.column_id;
+
+        select p.name, type_name(p.user_type_id), p.max_length, p.precision, p.scale, p.is_output
+        from sys.parameters as p
+        where p.object_id = @id
+        order by p.parameter_id;
+
+        select i.index_id, i.name, lower(i.type_desc), i.is_primary_key, i.is_unique_constraint, i.is_unique,
+               i.filter_definition
+        from sys.indexes as i
+        where i.object_id = @id and i.type > 0
+        order by i.is_primary_key desc, i.is_unique_constraint desc, i.name;
+
+        select ic.index_id, col_name(ic.object_id, ic.column_id), ic.is_included_column, ic.is_descending_key
+        from sys.index_columns as ic
+        where ic.object_id = @id
+        order by ic.index_id, ic.is_included_column, ic.key_ordinal, ic.index_column_id;
+
+        select fk.object_id, fk.name, schema_name(r.schema_id) + N'.' + r.name,
+               lower(replace(fk.delete_referential_action_desc, N'_', N' ')),
+               lower(replace(fk.update_referential_action_desc, N'_', N' '))
+        from sys.foreign_keys as fk
+        join sys.objects as r on r.object_id = fk.referenced_object_id
+        where fk.parent_object_id = @id
+        order by fk.name;
+
+        select fkc.constraint_object_id, col_name(fkc.parent_object_id, fkc.parent_column_id),
+               col_name(fkc.referenced_object_id, fkc.referenced_column_id)
+        from sys.foreign_key_columns as fkc
+        where fkc.parent_object_id = @id
+        order by fkc.constraint_object_id, fkc.constraint_column_id;
+
+        select name, definition from sys.check_constraints where parent_object_id = @id order by name;
+
+        select name, is_disabled from sys.triggers where parent_id = @id order by name;
+
+        select type_name(user_type_id), cast(start_value as nvarchar(40)), cast(increment as nvarchar(40)),
+               cast(minimum_value as nvarchar(40)), cast(maximum_value as nvarchar(40)), is_cycling
+        from sys.sequences
+        where object_id = @id;
+        """;
+
+    /// <summary>Describes the structure of one object, in a compact form.</summary>
+    [McpServerTool(Name = "describe_object", ReadOnly = true, Idempotent = true)]
+    [Description("Describes the structure of one object in a compact form. For a table: its approximate number "
+               + "of rows, its columns with their types, nullability, identity, defaults and computed expressions, "
+               + "its keys, indexes, outgoing foreign keys, checks and triggers. For a view: its columns. For a "
+               + "procedure or a function: its parameters. Use it to write a query against the object; for the "
+               + "exact DDL, to change the object, use script_object.")]
+    public string DescribeObject(
+        [Description("Object name, schema-qualified ('sales.orders'). An unqualified name is accepted "
+                   + "when exactly one schema holds it.")]
+        string objectName,
+        [Description("Also return the descriptions (MS_Description) of the object and of its columns, when the "
+                   + "database holds any.")]
+        bool descriptions = false)
+    {
+        if (_active is not { } active)
+            return NoConnectionSelected();
+
+        var (schema, name, refusal) = ResolveTarget(active, objectName);
+        if (refusal is not null)
+            return active.Stamp(refusal);
+
+        using var connection = new SqlConnection(active.ConnectionString);
+        connection.Open();
+
+        using var command = new SqlCommand(DescribeQuery, connection);
+        AddTargetParameters(command, schema, name);
+        command.Parameters.Add("@descriptions", SqlDbType.Bit).Value = descriptions;
+
+        using var reader = command.ExecuteReader();
+        var report = new StringBuilder();
+
+        // The object. Its row count is the one SQL Server keeps in its catalog, as SSMS shows it in the
+        // properties of a table: the rows themselves are neither read nor counted.
+        reader.Read();
+        report.Append($"{reader.GetString(0)}\t{schema}.{name}");
+        if (!reader.IsDBNull(1))
+            report.Append(CultureInfo.InvariantCulture,
+                $"\tabout {reader.GetInt64(1)} rows (from the catalog: the rows themselves were not read)");
+        report.AppendLine();
+        if (!reader.IsDBNull(2))
+            report.AppendLine($"Description: {reader.GetString(2)}");
+
+        // The columns of a table, a view or a function returning a table.
+        reader.NextResult();
+        var columns = new List<string>();
+        while (reader.Read())
+        {
+            var line = new StringBuilder(
+                $"{reader.GetString(0)}\t{FormatType(reader.GetString(1), reader.GetInt16(2), reader.GetByte(3), reader.GetByte(4))}"
+                + $"\t{(reader.GetBoolean(5) ? "null" : "not null")}");
+            if (!reader.IsDBNull(6))
+                line.Append($"\tidentity({reader.GetString(6)}, {reader.GetString(7)})");
+            if (!reader.IsDBNull(8))
+                line.Append($"\tdefault {reader.GetString(8)}");
+            if (!reader.IsDBNull(9))
+                line.Append($"\tcomputed as {reader.GetString(9)}");
+            if (!reader.IsDBNull(10))
+                line.Append($"\t-- {reader.GetString(10)}");
+            columns.Add(line.ToString());
+        }
+
+        if (columns.Count > 0)
+        {
+            report.AppendLine("Columns:");
+            foreach (var column in columns.Take(settings.MaxResults))
+                report.AppendLine(column);
+            if (columns.Count > settings.MaxResults)
+                report.AppendLine($"({columns.Count - settings.MaxResults} more columns: script_object returns them all.)");
+        }
+
+        // The parameters of a procedure or a function; the one without a name is what a scalar function returns.
+        reader.NextResult();
+        var parameters = new List<string>();
+        while (reader.Read())
+        {
+            var type = FormatType(reader.GetString(1), reader.GetInt16(2), reader.GetByte(3), reader.GetByte(4));
+            parameters.Add(reader.GetString(0) is { Length: > 0 } parameter
+                ? $"{parameter}\t{type}{(reader.GetBoolean(5) ? "\toutput" : string.Empty)}"
+                : $"returns\t{type}");
+        }
+
+        if (parameters.Count > 0)
+        {
+            report.AppendLine("Parameters:");
+            foreach (var parameter in parameters)
+                report.AppendLine(parameter);
+        }
+
+        // Keys and indexes, their columns read apart and joined here.
+        reader.NextResult();
+        var indexes = new List<(int Id, string Name, string Kind, bool Primary, bool UniqueConstraint, bool Unique, string? Filter)>();
+        while (reader.Read())
+            indexes.Add((reader.GetInt32(0), reader.GetString(1), reader.GetString(2), reader.GetBoolean(3),
+                         reader.GetBoolean(4), reader.GetBoolean(5), reader.IsDBNull(6) ? null : reader.GetString(6)));
+
+        reader.NextResult();
+        var indexColumns = new List<(int IndexId, string Column, bool Included, bool Descending)>();
+        while (reader.Read())
+            indexColumns.Add((reader.GetInt32(0), reader.GetString(1), reader.GetBoolean(2), reader.GetBoolean(3)));
+
+        foreach (var index in indexes)
+        {
+            var keys = indexColumns.Where(c => c.IndexId == index.Id && !c.Included)
+                                   .Select(c => c.Descending ? $"{c.Column} desc" : c.Column);
+            var included = indexColumns.Where(c => c.IndexId == index.Id && c.Included).Select(c => c.Column).ToList();
+            var label = index.Primary ? "Primary key"
+                      : index.UniqueConstraint ? "Unique constraint"
+                      : index.Unique ? "Unique index"
+                      : "Index";
+
+            var line = new StringBuilder($"{label}: {index.Name} ({string.Join(", ", keys)}) {index.Kind}");
+            if (included.Count > 0)
+                line.Append($" include ({string.Join(", ", included)})");
+            if (index.Filter is not null)
+                line.Append($" where {index.Filter}");
+            report.AppendLine(line.ToString());
+        }
+
+        // Outgoing foreign keys; the incoming ones are what find_references returns.
+        reader.NextResult();
+        var foreignKeys = new List<(int Id, string Name, string Target, string OnDelete, string OnUpdate)>();
+        while (reader.Read())
+            foreignKeys.Add((reader.GetInt32(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4)));
+
+        reader.NextResult();
+        var foreignKeyColumns = new List<(int Id, string Parent, string Referenced)>();
+        while (reader.Read())
+            foreignKeyColumns.Add((reader.GetInt32(0), reader.GetString(1), reader.GetString(2)));
+
+        foreach (var key in foreignKeys)
+        {
+            var pairs = foreignKeyColumns.Where(c => c.Id == key.Id).ToList();
+            var line = new StringBuilder(
+                $"Foreign key: {key.Name} ({string.Join(", ", pairs.Select(c => c.Parent))}) -> "
+                + $"{key.Target} ({string.Join(", ", pairs.Select(c => c.Referenced))})");
+            if (key.OnDelete != "no action")
+                line.Append($" on delete {key.OnDelete}");
+            if (key.OnUpdate != "no action")
+                line.Append($" on update {key.OnUpdate}");
+            report.AppendLine(line.ToString());
+        }
+
+        reader.NextResult();
+        while (reader.Read())
+            report.AppendLine($"Check: {reader.GetString(0)} {reader.GetString(1)}");
+
+        reader.NextResult();
+        while (reader.Read())
+            report.AppendLine($"Trigger: {reader.GetString(0)}{(reader.GetBoolean(1) ? " (disabled)" : string.Empty)}");
+
+        reader.NextResult();
+        while (reader.Read())
+            report.AppendLine($"Sequence: {reader.GetString(0)}, start {reader.GetString(1)}, increment {reader.GetString(2)}, "
+                            + $"minimum {reader.GetString(3)}, maximum {reader.GetString(4)}{(reader.GetBoolean(5) ? ", cycling" : string.Empty)}");
+
+        return active.Stamp(report.ToString());
+    }
 
     /// <summary>Scripts one object with SMO, the engine SSMS uses.</summary>
     [McpServerTool(Name = "script_object", ReadOnly = true, Idempotent = true)]

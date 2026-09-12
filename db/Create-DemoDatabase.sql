@@ -148,6 +148,54 @@ go
 alter table legacy.contact drop column fax;
 go
 
+-- A table carrying what describe_object reports beyond columns: an identity, a default, a computed
+-- column, a check, a unique constraint, a filtered index with an included column, a foreign key with a
+-- cascade, a trigger, and descriptions.
+create schema logistics;
+go
+
+create table logistics.stock_movement
+(
+    stock_movement_id bigint not null identity (1, 1),
+    item_code varchar(20) not null,
+    direction char(3) not null,
+    quantity decimal(18, 3) not null,
+    quantity_signed as (case when direction = 'out' then -quantity else quantity end),
+    reference nvarchar(40) not null,
+    moved_at datetimeoffset(3) not null
+        constraint df_stock_movement_moved_at default sysdatetimeoffset(),
+    constraint pk_stock_movement primary key (stock_movement_id),
+    constraint uq_stock_movement_reference unique (reference),
+    constraint ck_stock_movement_direction check (direction in ('in', 'out')),
+    constraint fk_stock_movement_item_a foreign key (item_code)
+        references stock.item_a (item_code) on delete cascade
+);
+go
+
+create index ix_stock_movement_item_out
+on logistics.stock_movement (item_code) include (quantity)
+where direction = 'out';
+go
+
+create trigger logistics.tr_stock_movement_touch
+on logistics.stock_movement
+after insert
+as
+set nocount on;
+go
+
+exec sys.sp_addextendedproperty
+    @name = N'MS_Description', @value = N'Movements in and out of stock.',
+    @level0type = N'SCHEMA', @level0name = N'logistics',
+    @level1type = N'TABLE',  @level1name = N'stock_movement';
+
+exec sys.sp_addextendedproperty
+    @name = N'MS_Description', @value = N'Always positive: direction gives the sign.',
+    @level0type = N'SCHEMA', @level0name = N'logistics',
+    @level1type = N'TABLE',  @level1name = N'stock_movement',
+    @level2type = N'COLUMN', @level2name = N'quantity';
+go
+
 -- Trap: audit.journal does not exist. SQL Server creates the procedure anyway, and it fails only
 -- when it runs.
 create procedure audit.audit_write @message nvarchar(400)

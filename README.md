@@ -40,6 +40,17 @@ the MCP server had a bug, or had been modified, it could not do more than its lo
 rights are granted by you, with a script you read before running it. So you do not have to trust the
 MCP server. You can check for yourself, on your own instance, what its login can and cannot do.
 
+### The one figure about the data: the number of rows
+
+The `describe_object` tool gives the approximate number of rows of a table. At first sight, this looks
+as if the MCP server had read the table. It has not.
+
+SQL Server keeps that number in its catalog, in the system view `sys.partitions`, as part of what it
+knows about the storage of a table. The `VIEW DEFINITION` right shows it, just as SSMS shows it in the
+properties of a table. The MCP server reads that number, and nothing else: it never counts the rows,
+and never reads them. The number is approximate because SQL Server maintains it for its own needs, not
+as an exact count.
+
 ### The four steps
 
 Setting it up takes four steps. The three scripts they use are in the `db/` folder of this repository,
@@ -193,7 +204,7 @@ of the table tried will be your own:
 
 ```text
 step  check_name              verdict  detail
-1     sees the definitions    PASS     28 objects visible, 11 module texts readable
+1     sees the definitions    PASS     35 objects visible, 12 module texts readable
 2     reads no data           PASS     0 tables or views readable; reading [legacy].[100%_done] refused (229)
 3     writes nothing          PASS     0 rights to write held; creating a table refused (262)
 4     reads the dependencies  PASS     0 objects reference [legacy].[100%_done]
@@ -271,12 +282,13 @@ never writes to the database.
 The MCP server provides exact facts about the database. The AI model writes the SQL. It writes it with
 the real names of tables and columns, the real types, the real nullability.
 
-The MCP server offers seven tools, and an eighth when you provide a conventions file:
+The MCP server offers eight tools, and a ninth when you provide a conventions file:
 
 | Tool | What it returns |
 | --- | --- |
 | `list_objects` | The list of tables, views, procedures, functions and sequences. It can be filtered by schema, name, object type or modification date. For each view, procedure or function, it gives the length of its text: the agent knows what an object will cost to read before asking for it. |
-| `script_object` | The complete `CREATE` script of an object, as SSMS produces it. |
+| `describe_object` | A compact summary of the structure of an object. For a table: its approximate number of rows, its columns and their types, its keys, indexes, foreign keys, checks and triggers. For a view: its columns. For a procedure or a function: its parameters. On request, the descriptions (`MS_Description`) of the object and of its columns. |
+| `script_object` | The complete `CREATE` script of an object, as SSMS produces it. The agent uses it when it has to change the object, and `describe_object` when it only needs to know its structure. |
 | `find_references` | What uses an object: the views, procedures, functions and triggers that rely on it, and the tables whose foreign keys point to it. Or, the other way round, what that object uses. |
 | `search_modules` | The lines of the text of views, procedures, functions and triggers that contain a fragment, with their line numbers and, on request, a few lines around them. |
 | `find_columns` | The tables and views that have a column of a given name, with the type of that column. |
@@ -342,7 +354,11 @@ Two tools help load only what is useful. `list_objects` gives the length of the 
 loading it: some procedures exceed 200,000 characters. And `search_modules` lets the agent read a
 passage of a large module without loading it whole.
 
-Finally, the description of the seven tools takes about 2,000 tokens in every conversation of the
+For the same reason, `describe_object` is the tool to know the structure of a table: on a large table
+of a production database, it returned about a sixth of what `script_object` returned, in one second
+rather than forty.
+
+Finally, the description of the eight tools takes about 2,300 tokens in every conversation of the
 client, even when the conversation has nothing to do with a database.
 
 ### To the SQL Server instance
