@@ -1,17 +1,29 @@
--- Lists what the role public is granted in the current database, outside the catalog views. Every user
--- of the database holds these rights, the login of SharpPyxis.SqlServer.SchemaMcp included, on top of
--- what it is granted by name.
+-- Review-PublicPermissions.sql
 --
--- Run it as a database administrator: sys.database_permissions shows a login only the rights it can
--- see, so run as the restricted login it would list less than there is.
+-- Lists the rights that the role public holds in the current database, outside the catalog views.
 --
--- The rows to read are the rights that write. In a database where the SSMS diagram designer has been
--- used, EXECUTE on dbo.sp_creatediagram, sp_alterdiagram, sp_renamediagram and sp_dropdiagram: the
--- four procedures Create-DdlReaderLogin.sql denies.
+-- Every user of a database is a member of public, and cannot be removed from it. A right granted to
+-- public is therefore held by every user, the login of the MCP server included, on top of the rights
+-- granted to it by name. Create-DdlReaderLogin.sql grants that login one right, VIEW DEFINITION; this
+-- script shows what it receives anyway, through public.
+--
+-- Run it as an administrator of the database. The view that lists the rights, sys.database_permissions,
+-- only shows a login the rights it is allowed to see: run as the restricted login, the list would be
+-- shorter than the truth.
+--
+-- How to read the result:
+--
+--   * On a new database, two rows appear: VIEW ANY COLUMN ENCRYPTION KEY DEFINITION and VIEW ANY COLUMN
+--     MASTER KEY DEFINITION. They show the metadata of Always Encrypted keys, and no data.
+--   * EXECUTE on dbo.sp_creatediagram, sp_alterdiagram, sp_renamediagram and sp_dropdiagram appears in a
+--     database where the SSMS diagram designer has been used. These four procedures write, and
+--     Create-DdlReaderLogin.sql denies them to its role.
+--   * Any other SELECT, INSERT, UPDATE, DELETE or EXECUTE granted to public reads or writes data, for
+--     every user of the database. It deserves a look, whatever the MCP server.
 
 select p.class_desc as class,
-       -- The descriptive columns of the catalog carry a collation of their own, and a name the one of
-       -- the database: each branch is brought to the same one, or the CASE refuses to mix them (451).
+       -- The descriptive columns of the catalog carry a collation of their own, and a name the one of the
+       -- database: each branch is brought to the same one, or the CASE refuses to mix them (error 451).
        case p.class
            when 0 then quotename(db_name()) collate database_default
            when 1 then quotename(s.name) + N'.' + quotename(o.name) collate database_default
