@@ -53,7 +53,8 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
     /// </summary>
     public IEnumerable<McpServerTool> CreateTools() =>
         [CreateTool(nameof(UseConnection)), CreateTool(nameof(ServerInfo)),
-         CreateTool(nameof(ListObjects)), CreateTool(nameof(ScriptObject)), CreateTool(nameof(FindReferences))];
+         CreateTool(nameof(ListObjects)), CreateTool(nameof(ScriptObject)), CreateTool(nameof(FindReferences)),
+         CreateTool(nameof(SearchModules))];
 
     private McpServerTool CreateTool(string methodName)
     {
@@ -517,8 +518,8 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         return report.Append(DynamicSqlReminder).ToString();
     }
 
-    private static Dictionary<string, int> CountBy(List<ObjectRow> rows, Func<ObjectRow, string> key) =>
-        rows.GroupBy(key).ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+    private static Dictionary<string, int> CountBy<T>(IEnumerable<T> items, Func<T, string> key) =>
+        items.GroupBy(key).ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
 
     private async Task<string> ReadReferencedAsync(
         SqlConnection connection, string targetSchema, string targetName, CancellationToken cancellationToken)
@@ -623,6 +624,184 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
 
         report.AppendLine();
     }
+
+    // The object types that carry a text of their own.
+    private const string ModuleTypes = "'V', 'P', 'FN', 'IF', 'TF', 'TR'";
+
+    // One generated or minified line can weigh more than a whole procedure.
+    private const int MaxLineLength = 400;
+
+    private const int MaxContextLines = 10;
+
+    /// <summary>Searches the text of the modules for a literal fragment.</summary>
+    [McpServerTool(Name = "search_modules", ReadOnly = true, Idempotent = true)]
+    [Description("Searches the text of views, procedures, functions and triggers for a fragment, and returns "
+               + "the lines holding it — 'number: text' for an occurrence, 'number- text' for context. It finds "
+               + "what the dependency graph of find_references cannot see: a name written inside a string of "
+               + "dynamic SQL. Filtered on one object, it searches that object only, which reads a passage of a "
+               + "large module without loading it whole. An unfiltered search reads every definition of the "
+               + "database and takes long on a large one: filter on a schema, a type or part of a name whenever "
+               + "the request allows. Encrypted modules have no readable text and are never found.")]
+    public async Task<string> SearchModules(
+        [Description("Text to look for, taken literally: % and _ are not wildcards. The comparison follows the "
+                   + "collation of the database, usually case-insensitive.")]
+        string text,
+        [Description("Only modules of this schema. Optional, exact match.")]
+        string? schema = null,
+        [Description("Only modules whose name contains this. Optional.")]
+        string? name = null,
+        [Description("Only modules of this kind: 'view', 'procedure' or 'function'. Optional.")]
+        string? objectType = null,
+        [Description("Lines shown before and after each occurrence, from 0 (default) to 10. The numbers are "
+                   + "those of the stored text, and can drift from the lines script_object returns.")]
+        int context = 0,
+        CancellationToken cancellationToken = default)
+    {
+        if (_active is not { } active)
+            return NoConnectionSelected();
+
+        if (string.IsNullOrWhiteSpace(text))
+            return active.Stamp("Give the text to look for.");
+
+        // The scan stops at the first modules found beyond the cap: counting them all would read every
+        // definition of the database, the very cost the cap exists to avoid. No ORDER BY for the same
+        // reason — sorting needs every match before it returns the first.
+        var query = $"""
+            select top (@take) s.name, o.name, o.type_desc, m.definition
+            from sys.sql_modules as m
+            join sys.objects as o on o.object_id = m.object_id
+            join sys.schemas as s on s.schema_id = o.schema_id
+            where o.type in ({ModuleTypes})
+              and o.is_ms_shipped = 0
+              and m.definition like @text escape '\'
+            {ObjectFilter};
+            """;
+
+        await using var connection = new SqlConnection(active.ConnectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        // On a database of 32,000 modules, a search reading every definition was measured at 11 seconds,
+        // and a pass computing over all their text at 35: the default timeout of 30 is too close.
+        await using var command = new SqlCommand(query, connection) { CommandTimeout = 120 };
+        command.Parameters.Add("@take", SqlDbType.Int).Value = settings.MaxResults + 1;
+        command.Parameters.Add("@text", SqlDbType.NVarChar, -1).Value = BuildNamePattern(text, "contains");
+        AddFilterParameters(command, schema, BuildNamePattern(name, "contains"), objectType, null);
+
+        var modules = new List<ModuleText>();
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+                modules.Add(new ModuleText(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3)));
+        }
+
+        if (modules.Count == 0)
+            return active.Stamp($"No module contains '{text}'.");
+
+        modules.Sort((left, right) => string.CompareOrdinal($"{left.Schema}.{left.Name}", $"{right.Schema}.{right.Name}"));
+
+        return active.Stamp(modules.Count > settings.MaxResults
+            ? DescribeSearchSample(modules, text)
+            : FormatOccurrences(modules, text, Math.Clamp(context, 0, MaxContextLines)));
+    }
+
+    private string DescribeSearchSample(List<ModuleText> modules, string text)
+    {
+        var report = new StringBuilder();
+        report.AppendLine($"More than {settings.MaxResults} modules contain '{text}'. The search stopped there "
+                        + $"rather than read every definition: the {modules.Count} found first spread as follows, "
+                        + "a sample rather than the whole.");
+        report.AppendLine();
+
+        var bySchema = CountBy(modules, module => module.Schema);
+        AppendBreakdown(report, "By schema", bySchema, modules.Count);
+        AppendBreakdown(report, "By type", CountBy(modules, module => module.Type), modules.Count);
+
+        // As in list_objects: when one schema holds most of the sample, filtering on it changes little,
+        // and the names are the axis left.
+        if ((double)bySchema.Values.Max() / modules.Count > DominantShare)
+        {
+            var prefixes = CountBy(
+                modules.Where(module => module.Name.IndexOf('_') > 0),
+                module => module.Name[..module.Name.IndexOf('_')]);
+
+            if (prefixes.Count > 0)
+                AppendBreakdown(report, "By name prefix (observed in the names, not a structure of the database)",
+                    prefixes, modules.Count);
+        }
+
+        return report.Append("Narrow with schema, name or objectType, or look for a more specific text.").ToString();
+    }
+
+    // Every module found is named; its lines are given until the cap, and the modules past it are
+    // listed without them.
+    private string FormatOccurrences(List<ModuleText> modules, string text, int context)
+    {
+        var report = new StringBuilder();
+        var budget = settings.MaxResults;
+        var unlisted = new List<string>();
+
+        foreach (var module in modules)
+        {
+            var lines = module.Definition.Replace("\r\n", "\n").Split('\n');
+            var hits = Enumerable.Range(0, lines.Length)
+                .Where(index => lines[index].Contains(text, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            var heading = $"{module.Type}\t{module.Schema}.{module.Name}\t{hits.Count} matching lines";
+            if (budget <= 0)
+            {
+                unlisted.Add(heading);
+                continue;
+            }
+
+            report.AppendLine(heading);
+
+            // The collation matched where an ordinal comparison does not: accents, most often.
+            if (hits.Count == 0)
+            {
+                report.AppendLine("(the collation matches this module on a form of the text this search cannot place)");
+                continue;
+            }
+
+            var windows = MergeWindows(hits, context, lines.Length);
+            for (var index = 0; index < windows.Count && budget > 0; index++)
+            {
+                if (index > 0)
+                    report.AppendLine("...");
+
+                for (var line = windows[index].First; line <= windows[index].Last && budget > 0; line++, budget--)
+                    report.AppendLine($"{line + 1}{(hits.Contains(line) ? ':' : '-')} {Cut(lines[line].TrimEnd())}");
+            }
+        }
+
+        if (budget <= 0)
+        {
+            report.AppendLine($"(Lines capped at {settings.MaxResults}. Narrow the search to read the rest.)");
+            foreach (var heading in unlisted)
+                report.AppendLine(heading);
+        }
+
+        return report.ToString();
+    }
+
+    // Windows that overlap or touch are merged, so no line is shown twice.
+    private static List<(int First, int Last)> MergeWindows(List<int> hits, int context, int lineCount)
+    {
+        var merged = new List<(int First, int Last)>();
+        foreach (var hit in hits)
+        {
+            var (first, last) = (Math.Max(0, hit - context), Math.Min(lineCount - 1, hit + context));
+            if (merged.Count > 0 && first <= merged[^1].Last + 1)
+                merged[^1] = (merged[^1].First, Math.Max(merged[^1].Last, last));
+            else
+                merged.Add((first, last));
+        }
+
+        return merged;
+    }
+
+    private static string Cut(string line) =>
+        line.Length <= MaxLineLength ? line : $"{line[..MaxLineLength]} [cut]";
 
     /// <summary>Scripts one object with SMO, the engine SSMS uses.</summary>
     [McpServerTool(Name = "script_object", ReadOnly = true, Idempotent = true)]
@@ -776,6 +955,8 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
     private sealed record Spread(int Total, Dictionary<string, int> BySchema, Dictionary<string, int> ByType);
 
     private sealed record ObjectRow(string Schema, string Name, string Type, DateTime Modified, long? Chars, string? Note);
+
+    private sealed record ModuleText(string Schema, string Name, string Type, string Definition);
 
     /// <summary>The connection in use, and the database chosen on it.</summary>
     private sealed record ActiveConnection(ConnectionEntry Entry, string Database)
