@@ -141,7 +141,9 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
     /// <summary>Lists the objects of the database, filtered on schema, name, type or last change.</summary>
     [McpServerTool(Name = "list_objects", ReadOnly = true, Idempotent = true)]
     [Description("Lists the tables, views, procedures, functions and sequences of the database, with their "
-               + "schema and last modification date. A large database holds tens of thousands of objects, so "
+               + "schema, last modification date and, for views, procedures and functions, the length of their "
+               + "text in characters: what script_object would cost to read. "
+               + "A large database holds tens of thousands of objects, so "
                + "filter whenever the request names a schema, a type or part of a name. When nothing in the "
                + "request tells you what to filter on, ask the user rather than guess. An unfiltered call that "
                + "matches too many objects returns how they are spread rather than the rows, which is what to "
@@ -199,15 +201,23 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         DateTime? modifiedSince, bool mostRecentFirst, int total, CancellationToken cancellationToken)
     {
         // The NULL first sort key leaves the order to schema and name unless mostRecentFirst is set.
+        // The length is read after the top, on the rows returned only: over a whole database it costs
+        // seconds. It is null for tables and sequences, which have no text, and for encrypted modules.
         var query = $"""
-            select top (@limit) s.name, o.name, o.type_desc, o.modify_date
-            from sys.objects as o
-            join sys.schemas as s on s.schema_id = o.schema_id
-            where o.type in ({ExposedTypes})
-            {ObjectFilter}
-            order by case when @mostRecentFirst = 1 then o.modify_date end desc,
-                     s.name,
-                     o.name;
+            select t.schema_name, t.object_name, t.type_desc, t.modify_date, datalength(m.definition) / 2
+            from (select top (@limit) o.object_id, s.name as schema_name, o.name as object_name,
+                                      o.type_desc, o.modify_date
+                  from sys.objects as o
+                  join sys.schemas as s on s.schema_id = o.schema_id
+                  where o.type in ({ExposedTypes})
+                  {ObjectFilter}
+                  order by case when @mostRecentFirst = 1 then o.modify_date end desc,
+                           s.name,
+                           o.name) as t
+            left join sys.sql_modules as m on m.object_id = t.object_id
+            order by case when @mostRecentFirst = 1 then t.modify_date end desc,
+                     t.schema_name,
+                     t.object_name;
             """;
 
         await using var command = new SqlCommand(query, connection);
@@ -222,7 +232,9 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         while (await reader.ReadAsync(cancellationToken))
         {
             inventory.Append(CultureInfo.InvariantCulture,
-                $"{reader.GetString(2)}\t{reader.GetString(0)}.{reader.GetString(1)}\t{reader.GetDateTime(3):yyyy-MM-dd HH:mm:ss}");
+                $"{reader.GetString(2)}\t{reader.GetString(0)}.{reader.GetString(1)}\t{reader.GetDateTime(3):yyyy-MM-dd HH:mm:ss}\t");
+            if (!reader.IsDBNull(4))
+                inventory.Append(reader.GetInt64(4));
             inventory.AppendLine();
             returned++;
         }
@@ -357,7 +369,9 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
     /// <summary>Scripts one object with SMO, the engine SSMS uses.</summary>
     [McpServerTool(Name = "script_object", ReadOnly = true, Idempotent = true)]
     [Description("Returns the complete CREATE script of one object, as SSMS generates it: tables with "
-               + "constraints, indexes and triggers; views, procedures and functions with their original text.")]
+               + "constraints, indexes and triggers; views, procedures and functions with their original text. "
+               + "A procedure can run to hundreds of thousands of characters: when the object may be large, "
+               + "read its length in list_objects first.")]
     public string ScriptObject(
         [Description("Object name, schema-qualified ('sales.orders'). An unqualified name is accepted "
                    + "when exactly one schema holds it.")]
