@@ -23,8 +23,8 @@ if (verb != "serve" && !Console.IsInputRedirected)
         This is an MCP server: an MCP client starts it and speaks to it over standard input.
         Started from a console, it has nothing to say, so it shows this instead.
 
-          schemamcp configure   manage the connections it works against
-          schemamcp serve       run the server against this console, for debugging
+          schema-mcp configure   manage the connections it works against
+          schema-mcp serve       run the server against this console, for debugging
         """);
     return 0;
 }

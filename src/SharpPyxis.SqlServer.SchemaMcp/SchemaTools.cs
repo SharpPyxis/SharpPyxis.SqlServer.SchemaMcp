@@ -104,7 +104,7 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
     {
         var connections = LoadConnections();
         if (connections.Count == 0)
-            return $"No connection is configured. Run 'SchemaMcp configure add' first (file: {settings.ConfigPath}).";
+            return $"No connection is configured. Run 'schema-mcp configure add' first (file: {settings.ConfigPath}).";
 
         if (id is null)
             return "Available connections:" + Environment.NewLine
