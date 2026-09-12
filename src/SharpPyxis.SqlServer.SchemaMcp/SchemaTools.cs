@@ -54,7 +54,7 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
     public IEnumerable<McpServerTool> CreateTools() =>
         [CreateTool(nameof(UseConnection)), CreateTool(nameof(ServerInfo)),
          CreateTool(nameof(ListObjects)), CreateTool(nameof(ScriptObject)), CreateTool(nameof(FindReferences)),
-         CreateTool(nameof(SearchModules))];
+         CreateTool(nameof(SearchModules)), CreateTool(nameof(FindColumns))];
 
     private McpServerTool CreateTool(string methodName)
     {
@@ -291,6 +291,12 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         await using var command = new SqlCommand(query, connection);
         AddFilterParameters(command, schema, namePattern, objectType, modifiedSince);
 
+        return await CollectSpreadAsync(command, cancellationToken);
+    }
+
+    // Reads rows of (schema, type, count) into the spread a listing tool describes itself with.
+    private static async Task<Spread> CollectSpreadAsync(SqlCommand command, CancellationToken cancellationToken)
+    {
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
 
         var bySchema = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -314,7 +320,9 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         DateTime? modifiedSince, CancellationToken cancellationToken)
     {
         var report = new StringBuilder();
-        report.AppendLine($"{spread.Total} objects match, more than the {settings.MaxResults} this server returns at once.");
+        report.AppendLine(spread.Total > settings.MaxResults
+            ? $"{spread.Total} objects match, more than the {settings.MaxResults} this server returns at once."
+            : $"{spread.Total} objects match.");
         report.AppendLine();
         AppendBreakdown(report, "By schema", spread.BySchema, spread.Total);
         AppendBreakdown(report, "By type", spread.ByType, spread.Total);
@@ -802,6 +810,142 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
 
     private static string Cut(string line) =>
         line.Length <= MaxLineLength ? line : $"{line[..MaxLineLength]} [cut]";
+
+    // Tables and views: the objects a query reads columns from. Shared by the count, the spread and
+    // the rows of find_columns, so the three always see the same columns.
+    private const string ColumnSource = $"""
+        from sys.columns as c
+        join sys.objects as o on o.object_id = c.object_id
+        join sys.schemas as s on s.schema_id = o.schema_id
+        where o.type in ('U', 'V')
+          and o.is_ms_shipped = 0
+          and c.name like @columnPattern escape '\'
+        {ObjectFilter}
+        """;
+
+    /// <summary>Finds the tables and views carrying a column of that name, across the database.</summary>
+    [McpServerTool(Name = "find_columns", ReadOnly = true, Idempotent = true)]
+    [Description("Finds the tables and views carrying a column whose name matches, across the database, with "
+               + "the column's type and nullability — 'which tables have a siret column'. A common fragment "
+               + "such as 'id' matches thousands of columns: a call matching too many returns how they spread, "
+               + "by column name first, rather than the rows.")]
+    public async Task<string> FindColumns(
+        [Description("Column name, or part of it, taken literally: % and _ are not wildcards.")]
+        string column,
+        [Description("How to match the column name: 'contains' (default) or 'equals'. Both follow the "
+                   + "collation of the database, which is usually case-insensitive.")]
+        string columnMatch = "contains",
+        [Description("Only objects of this schema. Optional, exact match.")]
+        string? schema = null,
+        [Description("Only objects of this kind: 'table' or 'view'. Optional.")]
+        string? objectType = null,
+        [Description("Take at most this many rows, and return them even when many more match.")]
+        int? limit = null,
+        [Description("Return only how many columns match, and how they are spread, without any row.")]
+        bool countOnly = false,
+        CancellationToken cancellationToken = default)
+    {
+        if (_active is not { } active)
+            return NoConnectionSelected();
+
+        if (BuildNamePattern(column, columnMatch) is not { } columnPattern)
+            return active.Stamp("Give the name of the column, or part of it.");
+
+        await using var connection = new SqlConnection(active.ConnectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        Spread spread;
+        await using (var command = new SqlCommand($"select s.name, o.type_desc, count(*) {ColumnSource} group by s.name, o.type_desc;", connection))
+        {
+            AddColumnParameters(command, columnPattern, schema, objectType);
+            spread = await CollectSpreadAsync(command, cancellationToken);
+        }
+
+        if (spread.Total == 0)
+            return active.Stamp($"No table or view has a column matching '{column}'.");
+
+        if (countOnly || (limit is null && spread.Total > settings.MaxResults))
+            return active.Stamp(await DescribeColumnSpreadAsync(
+                connection, spread, columnPattern, schema, objectType,
+                exact: string.Equals(columnMatch, "equals", StringComparison.OrdinalIgnoreCase), cancellationToken));
+
+        var query = $"""
+            select top (@limit) s.name, o.name, o.type_desc, c.name, type_name(c.user_type_id),
+                                c.max_length, c.precision, c.scale, c.is_nullable
+            {ColumnSource}
+            order by s.name, o.name, c.column_id;
+            """;
+
+        await using var rowsCommand = new SqlCommand(query, connection);
+        rowsCommand.Parameters.Add("@limit", SqlDbType.Int).Value = Math.Min(limit ?? settings.MaxResults, settings.MaxResults);
+        AddColumnParameters(rowsCommand, columnPattern, schema, objectType);
+
+        var report = new StringBuilder();
+        var returned = 0;
+        await using (var reader = await rowsCommand.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var type = FormatType(reader.GetString(4), reader.GetInt16(5), reader.GetByte(6), reader.GetByte(7));
+                var nullability = reader.GetBoolean(8) ? "null" : "not null";
+                report.AppendLine($"{reader.GetString(2)}\t{reader.GetString(0)}.{reader.GetString(1)}\t{reader.GetString(3)}\t{type}\t{nullability}");
+                returned++;
+            }
+        }
+
+        if (returned < spread.Total)
+            report.AppendLine($"({returned} of {spread.Total} matching columns.)");
+
+        return active.Stamp(report.ToString());
+    }
+
+    private async Task<string> DescribeColumnSpreadAsync(
+        SqlConnection connection, Spread spread, string columnPattern, string? schema, string? objectType,
+        bool exact, CancellationToken cancellationToken)
+    {
+        // By column name first: 'id' matching thousands of columns is answered by the handful of names
+        // it actually stands for.
+        var byName = new Dictionary<string, int>(StringComparer.Ordinal);
+        await using (var command = new SqlCommand($"select c.name, count(*) {ColumnSource} group by c.name;", connection))
+        {
+            AddColumnParameters(command, columnPattern, schema, objectType);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+                byName[reader.GetString(0)] = reader.GetInt32(1);
+        }
+
+        var report = new StringBuilder();
+        report.AppendLine(spread.Total > settings.MaxResults
+            ? $"{spread.Total} columns match, more than the {settings.MaxResults} this server returns at once."
+            : $"{spread.Total} columns match.");
+        report.AppendLine();
+        if (byName.Count > 1)
+            AppendBreakdown(report, "By column name", byName, spread.Total);
+
+        AppendBreakdown(report, "By schema", spread.BySchema, spread.Total);
+        AppendBreakdown(report, "By type", spread.ByType, spread.Total);
+
+        return report.Append(exact
+            ? "Narrow with schema or objectType, or pass limit to take the first rows anyway."
+            : "Narrow with schema or objectType, pass columnMatch 'equals' for one exact name, "
+              + "or pass limit to take the first rows anyway.").ToString();
+    }
+
+    private static void AddColumnParameters(SqlCommand command, string columnPattern, string? schema, string? objectType)
+    {
+        command.Parameters.Add("@columnPattern", SqlDbType.NVarChar, 300).Value = columnPattern;
+        AddFilterParameters(command, schema, null, objectType, null);
+    }
+
+    // Written as the DDL writes it, so the model reads the type it would declare.
+    private static string FormatType(string type, short maxLength, byte precision, byte scale) => type switch
+    {
+        "varchar" or "char" or "varbinary" or "binary" => $"{type}({(maxLength == -1 ? "max" : maxLength)})",
+        "nvarchar" or "nchar" => $"{type}({(maxLength == -1 ? "max" : maxLength / 2)})",
+        "decimal" or "numeric" => $"{type}({precision}, {scale})",
+        "datetime2" or "datetimeoffset" or "time" => $"{type}({scale})",
+        _ => type,
+    };
 
     /// <summary>Scripts one object with SMO, the engine SSMS uses.</summary>
     [McpServerTool(Name = "script_object", ReadOnly = true, Idempotent = true)]

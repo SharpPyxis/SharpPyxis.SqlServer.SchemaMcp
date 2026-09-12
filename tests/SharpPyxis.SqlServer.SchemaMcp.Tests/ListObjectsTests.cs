@@ -73,6 +73,15 @@ public sealed class ListObjectsTests(DemoDatabase database)
     }
 
     [Fact]
+    public async Task CountOnlyUnderTheCapDoesNotClaimAnOverflow()
+    {
+        var result = await database.CreateTools().ListObjects(schema: "stock", countOnly: true);
+
+        Assert.Contains("3 objects match.", result);
+        Assert.DoesNotContain("more than", result);
+    }
+
+    [Fact]
     public async Task ASingleSchemaFallsBackOnNamePrefixes()
     {
         var result = await database.CreateTools(maxResults: 3).ListObjects(schema: "sales");
