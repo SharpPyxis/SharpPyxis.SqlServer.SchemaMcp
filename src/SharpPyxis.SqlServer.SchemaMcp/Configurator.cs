@@ -105,16 +105,21 @@ internal static class Configurator
         return 0;
     }
 
+    /// <summary>The sub-commands as the help lists them, shared with server_info so the two never disagree.</summary>
+    public const string Commands = """
+          configure add                 record a new connection, testing it first
+          configure list                show what is recorded
+          configure test [id]           test one recorded connection, or all of them
+          configure set-password <id>   replace the password of one connection
+          configure remove <id>         delete one connection
+        """;
+
     private static int Usage(ConnectionStore store)
     {
-        Console.WriteLine("""
+        Console.WriteLine($"""
             Manages the connections this server can work against.
 
-              configure add                 record a new connection, testing it first
-              configure list                show what is recorded
-              configure test [id]           test one recorded connection, or all of them
-              configure set-password <id>   replace the password of one connection
-              configure remove <id>         delete one connection
+            {Commands}
 
             Nothing is recorded until a connection has been tested, or kept despite a failed test.
             """);

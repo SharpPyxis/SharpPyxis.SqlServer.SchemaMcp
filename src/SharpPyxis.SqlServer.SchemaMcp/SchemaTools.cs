@@ -52,7 +52,8 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
     /// what tells them apart.
     /// </summary>
     public IEnumerable<McpServerTool> CreateTools() =>
-        [CreateTool(nameof(UseConnection)), CreateTool(nameof(ListObjects)), CreateTool(nameof(ScriptObject))];
+        [CreateTool(nameof(UseConnection)), CreateTool(nameof(ServerInfo)),
+         CreateTool(nameof(ListObjects)), CreateTool(nameof(ScriptObject))];
 
     private McpServerTool CreateTool(string methodName)
     {
@@ -136,6 +137,37 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
             names.Add(reader.GetString(0));
 
         return names.Count == 0 ? "(no database is visible to this login)" : string.Join(Environment.NewLine, names);
+    }
+
+    /// <summary>Describes the installation, so the model can answer how connections are managed.</summary>
+    [McpServerTool(Name = "server_info", ReadOnly = true, Idempotent = true)]
+    [Description("Tells how this server is installed and set up: its executable and version, where its "
+               + "connections are stored, and the command line that adds, lists, tests or removes them. Call it "
+               + "when the user asks how to add, remove or change a connection, or where the server lives. It "
+               + "reads no database and changes nothing: the user runs those commands, in a console.")]
+    public string ServerInfo()
+    {
+        var version = typeof(SchemaTools).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "unknown";
+
+        var connections = settings.EnvironmentConnection is not null
+            ? "declared by the CONNECTION_STRING environment variable; the file and the commands below do not apply"
+            : $"stored in {settings.ConfigPath}, encrypted for the current Windows account";
+
+        // The model answers "how do I remove a connection" with a command the user can paste, and
+        // passing it stays the user's gesture: no tool writes the file.
+        return $"""
+            Executable: {Environment.ProcessPath}
+            Version: {version}
+            Connections: {connections}
+            Rows returned by a listing, at most: {settings.MaxResults} (DDL_MAX_RESULTS)
+
+            Connections are managed from a console, as "{Environment.ProcessPath}" followed by:
+            {Configurator.Commands}
+
+            A connection added this way is usable at once through use_connection. The list shown in
+            the tool descriptions is read when the client starts the server.
+            """.Replace("\r\n", "\n");
     }
 
     /// <summary>Lists the objects of the database, filtered on schema, name, type or last change.</summary>
