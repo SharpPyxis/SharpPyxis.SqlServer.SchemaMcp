@@ -51,10 +51,22 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
     /// instances of this server shows the model one set of tools per target, and the description is
     /// what tells them apart.
     /// </summary>
-    public IEnumerable<McpServerTool> CreateTools() =>
-        [CreateTool(nameof(UseConnection)), CreateTool(nameof(ServerInfo)),
-         CreateTool(nameof(ListObjects)), CreateTool(nameof(ScriptObject)), CreateTool(nameof(FindReferences)),
-         CreateTool(nameof(SearchModules)), CreateTool(nameof(FindColumns))];
+    public IEnumerable<McpServerTool> CreateTools()
+    {
+        List<McpServerTool> tools =
+        [
+            CreateTool(nameof(UseConnection)), CreateTool(nameof(ServerInfo)),
+            CreateTool(nameof(ListObjects)), CreateTool(nameof(ScriptObject)), CreateTool(nameof(FindReferences)),
+            CreateTool(nameof(SearchModules)), CreateTool(nameof(FindColumns)),
+        ];
+
+        // Offered only when the team wrote a conventions file: without one, the tool would cost its
+        // description in every conversation for nothing, and nothing is imposed in its place.
+        if (File.Exists(settings.ConventionsPath))
+            tools.Add(CreateTool(nameof(ReadConventions)));
+
+        return tools;
+    }
 
     private McpServerTool CreateTool(string methodName)
     {
@@ -153,6 +165,11 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
             ? "none"
             : active.ReadAccessWarning is { } warning ? $"{active.Describe()}\n{warning}" : active.Describe();
 
+        var conventions = File.Exists(settings.ConventionsPath)
+            ? $"{settings.ConventionsPath}, offered by read_conventions"
+            : $"none; a file at {settings.ConventionsPath}, or at DDL_CONVENTIONS_PATH, would be offered by "
+              + "read_conventions from the next start of the server";
+
         var version = typeof(SchemaTools).Assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "unknown";
 
@@ -168,6 +185,7 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
             Connections: {connections}
             Rows returned by a listing, at most: {settings.MaxResults} (DDL_MAX_RESULTS)
             Selected connection: {selected}
+            Conventions file: {conventions}
 
             Connections are managed from a console, as "{Environment.ProcessPath}" followed by:
             {Configurator.Commands}
@@ -175,6 +193,29 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
             A connection added this way is usable at once through use_connection. The list shown in
             the tool descriptions is read when the client starts the server.
             """.Replace("\r\n", "\n");
+    }
+
+    // A conventions file is written by people, and read whole by the model: past this length it is cut
+    // rather than allowed to fill the conversation, like any other answer of this server.
+    private const int MaxConventionsLength = 50_000;
+
+    /// <summary>Returns the conventions file of the team, as the team wrote it.</summary>
+    [McpServerTool(Name = "read_conventions", ReadOnly = true, Idempotent = true)]
+    [Description("Returns the SQL writing conventions of the team working on this database, as the team wrote "
+               + "them in a file. Call it before writing or changing SQL. Where the existing code does something "
+               + "else, follow the conventions, and say so.")]
+    public string ReadConventions()
+    {
+        if (!File.Exists(settings.ConventionsPath))
+            return $"The conventions file {settings.ConventionsPath} no longer exists: it was removed or renamed "
+                 + "after the server started.";
+
+        var text = File.ReadAllText(settings.ConventionsPath).Replace("\r\n", "\n");
+
+        return text.Length <= MaxConventionsLength
+            ? text
+            : $"{text[..MaxConventionsLength]}\n\n(The conventions file holds {text.Length} characters: only the "
+              + $"first {MaxConventionsLength} are returned.)";
     }
 
     /// <summary>Lists the objects of the database, filtered on schema, name, type or last change.</summary>

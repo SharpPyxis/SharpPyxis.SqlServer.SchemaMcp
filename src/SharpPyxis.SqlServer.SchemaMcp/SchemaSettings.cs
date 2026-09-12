@@ -4,17 +4,19 @@ namespace SharpPyxis.SqlServer.SchemaMcp;
 
 /// <summary>
 /// What the server reads from its environment: how much it may return, where its connections are
-/// stored, and the single connection an environment variable may declare instead of that file.
+/// stored, the single connection an environment variable may declare instead of that file, and where
+/// the conventions file of the team would be.
 /// </summary>
-internal sealed record SchemaSettings(int MaxResults, string ConfigPath, ConnectionEntry? EnvironmentConnection)
+internal sealed record SchemaSettings(
+    int MaxResults, string ConfigPath, ConnectionEntry? EnvironmentConnection, string ConventionsPath)
 {
     /// <summary>How many rows a listing tool returns at most when nothing else caps it.</summary>
     public const int DefaultMaxResults = 200;
 
     /// <summary>
-    /// Reads <c>DDL_MAX_RESULTS</c>, <c>DDL_CONFIG_PATH</c> and <c>CONNECTION_STRING</c>, all
-    /// optional. <c>CONNECTION_STRING</c> declares one connection without the encrypted file, which
-    /// is how the server runs where DPAPI does not.
+    /// Reads <c>DDL_MAX_RESULTS</c>, <c>DDL_CONFIG_PATH</c>, <c>DDL_CONVENTIONS_PATH</c> and
+    /// <c>CONNECTION_STRING</c>, all optional. <c>CONNECTION_STRING</c> declares one connection without
+    /// the encrypted file, which is how the server runs where DPAPI does not.
     /// </summary>
     public static SchemaSettings FromEnvironment()
     {
@@ -22,7 +24,13 @@ internal sealed record SchemaSettings(int MaxResults, string ConfigPath, Connect
             ? path
             : ConnectionStore.DefaultPath;
 
-        return new SchemaSettings(ReadMaxResults(), configPath, ReadEnvironmentConnection());
+        // Next to the executable by default. The variable is for where nobody puts a file by hand: an
+        // executable run from the NuGet cache, for instance.
+        var conventionsPath = Environment.GetEnvironmentVariable("DDL_CONVENTIONS_PATH") is { Length: > 0 } conventions
+            ? conventions
+            : Path.Combine(AppContext.BaseDirectory, "conventions.md");
+
+        return new SchemaSettings(ReadMaxResults(), configPath, ReadEnvironmentConnection(), conventionsPath);
     }
 
     // A cap the model could raise is no cap at all, so it lives in the environment like the

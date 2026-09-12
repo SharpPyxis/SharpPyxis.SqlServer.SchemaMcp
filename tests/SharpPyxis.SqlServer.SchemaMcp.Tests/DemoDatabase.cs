@@ -51,8 +51,13 @@ public sealed partial class DemoDatabase : IDisposable
         TrustServerCertificate = true,
     };
 
-    internal SchemaTools CreateTools(int maxResults = SchemaSettings.DefaultMaxResults) =>
-        new(new SchemaSettings(maxResults, UnusedConfigPath, Entry), new ConnectionStore(UnusedConfigPath));
+    // No conventions file unless a test gives one: the path below never exists.
+    internal SchemaTools CreateTools(int maxResults = SchemaSettings.DefaultMaxResults, string? conventionsPath = null) =>
+        new(new SchemaSettings(maxResults, UnusedConfigPath, Entry, conventionsPath ?? MissingConventionsPath),
+            new ConnectionStore(UnusedConfigPath));
+
+    private static readonly string MissingConventionsPath =
+        Path.Combine(Path.GetTempPath(), "SharpPyxis.SqlServer.SchemaMcp.Tests", "no-conventions.md");
 
     public void Dispose()
     {

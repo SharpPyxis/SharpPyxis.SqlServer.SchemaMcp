@@ -271,7 +271,7 @@ never writes to the database.
 The MCP server provides exact facts about the database. The AI model writes the SQL. It writes it with
 the real names of tables and columns, the real types, the real nullability.
 
-The MCP server offers seven tools:
+The MCP server offers seven tools, and an eighth when you provide a conventions file:
 
 | Tool | What it returns |
 | --- | --- |
@@ -282,6 +282,7 @@ The MCP server offers seven tools:
 | `find_columns` | The tables and views that have a column of a given name, with the type of that column. |
 | `use_connection` | The choice of the database to work on, among the connections you have declared. |
 | `server_info` | Where the executable is, its version, the file of connections, and the commands that manage them. The agent can then answer if you ask it how to remove a connection. |
+| `read_conventions` | Only when you provide a conventions file: the SQL writing conventions of your team, as you wrote them. See *Your team's conventions*, below. |
 
 ### Measuring the impact of a change
 
@@ -293,6 +294,28 @@ dynamic SQL. When a procedure builds a query in a character string and then runs
 table is inside the string, and SQL Server does not record it as a dependency. `search_modules` searches
 the text, and finds that name. On a production database that was measured, 1.1 % of the procedures,
 views and functions held dynamic SQL.
+
+### Your team's conventions (optional)
+
+The MCP server can also give the agent the SQL writing conventions of your team: how you name objects,
+which types you use, how you write a script. It imposes no convention, and it ships none.
+
+To use it, write your conventions in a Markdown file named `conventions.md`, and put it next to
+`schema-mcp.exe`. The MCP server then offers one more tool, `read_conventions`, which returns the file
+as it is. The description of that tool asks the agent to call it before writing SQL, and to follow the
+conventions where the existing code does something else. If the file lives somewhere else, the
+environment variable `DDL_CONVENTIONS_PATH` gives its location.
+
+Without the file, the tool does not exist, and it costs nothing. To stop using it, remove or rename the
+file. The file is read up to 50,000 characters; beyond that, the agent is told it was cut.
+
+You can also give the same file to your agent through its own instructions — the instructions of a
+project in Claude Desktop, a `CLAUDE.md` or `AGENTS.md` file, a skill — rather than through the MCP
+server. Choose one of the two: a file loaded twice costs twice, and two copies drift apart as soon as
+one of them is edited.
+
+The folder `examples/` holds an example of such a file, with a note on how to use it. It is the
+conventions of one team, published as an example, and nothing more.
 
 ### Known limits
 
@@ -403,6 +426,7 @@ Three environment variables set up the MCP server:
 | --- | --- |
 | `DDL_CONFIG_PATH` | Where the file of connections is. |
 | `DDL_MAX_RESULTS` | The maximum number of rows in an answer, 200 by default. The agent cannot change it. |
+| `DDL_CONVENTIONS_PATH` | Where the conventions file of your team is, when it is not next to the executable. Optional. |
 | `CONNECTION_STRING` | A single connection, declared without the file. It serves where DPAPI does not exist, outside Windows. The password is then in plain text in the configuration of the client. |
 
 ## Trying it on a demo database
