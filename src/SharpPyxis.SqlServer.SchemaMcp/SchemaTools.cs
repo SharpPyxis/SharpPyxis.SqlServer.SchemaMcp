@@ -49,7 +49,8 @@ internal sealed class SchemaTools(SchemaSettings settings)
         string? schema = null,
         [Description("Only objects whose name matches. Optional, substring by default.")]
         string? name = null,
-        [Description("How to match the name: 'contains' (default) or 'equals'.")]
+        [Description("How to match the name: 'contains' (default) or 'equals'. Both follow the collation of "
+                   + "the database, which is usually case-insensitive: 'equals' is not a strict comparison.")]
         string nameMatch = "contains",
         [Description("Only objects of this kind: 'table', 'view', 'procedure', 'function' or 'sequence'. Optional.")]
         string? objectType = null,
