@@ -6,9 +6,28 @@ using SharpPyxis.SqlServer.SchemaMcp;
 var settings = SchemaSettings.FromEnvironment();
 var store = new ConnectionStore(settings.ConfigPath);
 
-// Credentials are typed here, in the foreground, started by the user. The server itself never asks.
-if (args is [var verb, ..] && string.Equals(verb, "configure", StringComparison.OrdinalIgnoreCase))
+var verb = args is [var first, ..] ? first.ToLowerInvariant() : null;
+
+// Credentials are typed here, in the foreground, started by the user. The server never asks.
+if (verb == "configure")
     return Configurator.Run(store, args);
+
+// An MCP client always launches this with stdin on a pipe; a person launching it from a console
+// does not. That is what tells a server start from someone looking for the command line — and
+// 'serve' says it outright, for a configuration that would rather be explicit.
+if (verb != "serve" && !Console.IsInputRedirected)
+{
+    Console.WriteLine("""
+        SharpPyxis.SqlServer.SchemaMcp — read-only access to the DDL of SQL Server databases.
+
+        This is an MCP server: an MCP client starts it and speaks to it over standard input.
+        Started from a console, it has nothing to say, so it shows this instead.
+
+          schemamcp configure   manage the connections it works against
+          schemamcp serve       run the server against this console, for debugging
+        """);
+    return 0;
+}
 
 var builder = Host.CreateApplicationBuilder(args);
 
