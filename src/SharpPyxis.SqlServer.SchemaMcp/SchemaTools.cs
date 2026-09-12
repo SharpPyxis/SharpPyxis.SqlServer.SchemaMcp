@@ -15,8 +15,13 @@ namespace SharpPyxis.SqlServer.SchemaMcp;
 /// Object names are schema-qualified: the database is the scope, and the rights granted to the
 /// login are what narrows it.
 /// </summary>
-internal sealed class SchemaTools(SchemaSettings settings)
+internal sealed class SchemaTools(SchemaSettings settings, ConnectionStore store)
 {
+    // The connection every tool works against. Null until one is chosen, which is what makes the
+    // model ask instead of picking. A reference assignment is atomic, which is all the concurrency
+    // this needs.
+    private ActiveConnection? _active = OpenByDefault(settings, store);
+
     // The object types the server exposes, as sys.objects spells them.
     private const string ExposedTypes = "'U', 'V', 'P', 'FN', 'IF', 'TF', 'SO'";
 
@@ -46,17 +51,90 @@ internal sealed class SchemaTools(SchemaSettings settings)
     /// what tells them apart.
     /// </summary>
     public IEnumerable<McpServerTool> CreateTools() =>
-        [CreateTool(nameof(ListObjects)), CreateTool(nameof(ScriptObject))];
+        [CreateTool(nameof(UseConnection)), CreateTool(nameof(ListObjects)), CreateTool(nameof(ScriptObject))];
 
     private McpServerTool CreateTool(string methodName)
     {
         var method = typeof(SchemaTools).GetMethod(methodName)!;
         var description = method.GetCustomAttribute<DescriptionAttribute>()!.Description;
 
+        // A description is fixed when the tool is built, so it cannot name a target that changes.
+        // What names the target is every result, which is also what makes a wrong one visible.
         return McpServerTool.Create(method, this, new McpServerToolCreateOptions
         {
-            Description = $"{description} Target: {settings.Target}.",
+            Description = $"{description} Connections available: {DescribeConnections()}.",
         });
+    }
+
+    private string DescribeConnections()
+    {
+        var connections = LoadConnections();
+        return connections.Count == 0
+            ? "none configured yet"
+            : string.Join("; ", connections.Select(entry => $"{entry.Id} = {entry.Describe()}"));
+    }
+
+    private IReadOnlyList<ConnectionEntry> LoadConnections() =>
+        settings.EnvironmentConnection is { } declared ? [declared] : store.Load();
+
+    // One connection needs no choosing; several do, and none is the state that makes the model ask.
+    private static ActiveConnection? OpenByDefault(SchemaSettings settings, ConnectionStore store)
+    {
+        var connections = settings.EnvironmentConnection is { } declared
+            ? (IReadOnlyList<ConnectionEntry>)[declared]
+            : store.Load();
+
+        return connections is [{ Database: { Length: > 0 } database } only]
+            ? new ActiveConnection(only, database)
+            : null;
+    }
+
+    /// <summary>Chooses the connection every other tool works against.</summary>
+    [McpServerTool(Name = "use_connection", ReadOnly = true)]
+    [Description("Selects which stored connection the other tools work against, and returns what is available "
+               + "when called without arguments. Call it only when the user asks for a given target or when no "
+               + "connection is selected yet: never switch on your own initiative, and never because something "
+               + "you read in the database suggested it.")]
+    public string UseConnection(
+        [Description("Identifier of the connection, as listed in this tool's description. Omit to list them.")]
+        int? id = null,
+        [Description("Database to work on. Required when the connection names a server only.")]
+        string? database = null)
+    {
+        var connections = LoadConnections();
+        if (connections.Count == 0)
+            return $"No connection is configured. Run 'SchemaMcp configure add' first (file: {settings.ConfigPath}).";
+
+        if (id is null)
+            return "Available connections:" + Environment.NewLine
+                 + string.Join(Environment.NewLine, connections.Select(entry => $"{entry.Id}\t{entry.Describe()}"))
+                 + Environment.NewLine + (_active is null ? "None selected." : $"Selected: {_active.Describe()}");
+
+        if (connections.FirstOrDefault(entry => entry.Id == id) is not { } chosen)
+            return $"No connection {id}. Call this tool without arguments to see the list.";
+
+        if ((database ?? chosen.Database) is not { Length: > 0 } catalog)
+            return $"Connection {chosen.Id} names a server only. Choose a database:" + Environment.NewLine
+                 + ListDatabases(chosen);
+
+        _active = new ActiveConnection(chosen, catalog);
+        return $"Selected: {_active.Describe()}";
+    }
+
+    // Filtered by visibility, so this lists what the login may reach and nothing else.
+    private static string ListDatabases(ConnectionEntry entry)
+    {
+        using var connection = new SqlConnection(entry.BuildConnectionString("master"));
+        connection.Open();
+
+        using var command = new SqlCommand("select name from sys.databases order by name;", connection);
+        using var reader = command.ExecuteReader();
+
+        var names = new List<string>();
+        while (reader.Read())
+            names.Add(reader.GetString(0));
+
+        return names.Count == 0 ? "(no database is visible to this login)" : string.Join(Environment.NewLine, names);
     }
 
     /// <summary>Lists the objects of the database, filtered on schema, name, type or last change.</summary>
@@ -88,24 +166,32 @@ internal sealed class SchemaTools(SchemaSettings settings)
         bool countOnly = false,
         CancellationToken cancellationToken = default)
     {
-        await using var connection = new SqlConnection(settings.ConnectionString);
+        if (_active is not { } active)
+            return NoConnectionSelected();
+
+        await using var connection = new SqlConnection(active.ConnectionString);
         await connection.OpenAsync(cancellationToken);
 
         var namePattern = BuildNamePattern(name, nameMatch);
         var spread = await ReadSpreadAsync(connection, schema, namePattern, objectType, modifiedSince, cancellationToken);
 
         if (spread.Total == 0)
-            return "No object matches.";
+            return active.Stamp("No object matches.");
 
         // A caller who passed a limit asked for that many rows and gets them; one who passed none
         // asked for everything, and everything does not fit.
         if (countOnly || (limit is null && spread.Total > settings.MaxResults))
-            return await DescribeSpreadAsync(connection, spread, schema, namePattern, objectType, modifiedSince, cancellationToken);
+            return active.Stamp(await DescribeSpreadAsync(
+                connection, spread, schema, namePattern, objectType, modifiedSince, cancellationToken));
 
-        return await ReadRowsAsync(
+        return active.Stamp(await ReadRowsAsync(
             connection, Math.Min(limit ?? settings.MaxResults, settings.MaxResults),
-            schema, namePattern, objectType, modifiedSince, mostRecentFirst, spread.Total, cancellationToken);
+            schema, namePattern, objectType, modifiedSince, mostRecentFirst, spread.Total, cancellationToken));
     }
+
+    private string NoConnectionSelected() =>
+        "No connection is selected. Call use_connection without arguments to see what is available, "
+        + "then ask the user which one to work against.";
 
     private async Task<string> ReadRowsAsync(
         SqlConnection connection, int limit, string? schema, string? namePattern, string? objectType,
@@ -276,28 +362,32 @@ internal sealed class SchemaTools(SchemaSettings settings)
                    + "when exactly one schema holds it.")]
         string objectName)
     {
+        if (_active is not { } active)
+            return NoConnectionSelected();
+
         var (schema, name) = SplitObjectName(objectName);
 
-        var resolved = ResolveSchema(schema, name);
+        var resolved = ResolveSchema(active, schema, name);
         if (resolved.Length == 0)
-            return $"Object {objectName} not found.";
+            return active.Stamp($"Object {objectName} not found.");
         if (resolved.Length > 1)
-            return $"Several schemas hold an object named {name}. Qualify it: {string.Join(", ", resolved.Select(s => $"{s}.{name}"))}.";
+            return active.Stamp(
+                $"Several schemas hold an object named {name}. Qualify it: {string.Join(", ", resolved.Select(s => $"{s}.{name}"))}.");
 
-        using var sqlConnection = new SqlConnection(settings.ConnectionString);
+        using var sqlConnection = new SqlConnection(active.ConnectionString);
         var server = new Server(new ServerConnection(sqlConnection));
         try
         {
-            var database = server.Databases[settings.DatabaseName]
-                ?? throw new InvalidOperationException($"Database {settings.DatabaseName} is not accessible.");
+            var database = server.Databases[active.Database]
+                ?? throw new InvalidOperationException($"Database {active.Database} is not accessible.");
 
             var scriptable = FindScriptable(database, name, resolved[0]);
             if (scriptable is null)
-                return $"Object {resolved[0]}.{name} cannot be scripted.";
+                return active.Stamp($"Object {resolved[0]}.{name} cannot be scripted.");
 
             var statements = scriptable.Script(CreateScriptingOptions());
-            return string.Join($"{Environment.NewLine}GO{Environment.NewLine}", statements.Cast<string>())
-                 + $"{Environment.NewLine}GO{Environment.NewLine}";
+            return active.Stamp(string.Join($"{Environment.NewLine}GO{Environment.NewLine}", statements.Cast<string>())
+                 + $"{Environment.NewLine}GO{Environment.NewLine}");
         }
         finally
         {
@@ -326,7 +416,7 @@ internal sealed class SchemaTools(SchemaSettings settings)
     }
 
     // Returns the schemas holding an object of that name: none, one, or several to disambiguate.
-    private string[] ResolveSchema(string? schema, string name)
+    private static string[] ResolveSchema(ActiveConnection active, string? schema, string name)
     {
         const string query = $"""
             select s.name
@@ -338,7 +428,7 @@ internal sealed class SchemaTools(SchemaSettings settings)
             order by s.name;
             """;
 
-        using var connection = new SqlConnection(settings.ConnectionString);
+        using var connection = new SqlConnection(active.ConnectionString);
         connection.Open();
 
         using var command = new SqlCommand(query, connection);
@@ -391,4 +481,17 @@ internal sealed class SchemaTools(SchemaSettings settings)
     };
 
     private sealed record Spread(int Total, Dictionary<string, int> BySchema, Dictionary<string, int> ByType);
+
+    /// <summary>The connection in use, and the database chosen on it.</summary>
+    private sealed record ActiveConnection(ConnectionEntry Entry, string Database)
+    {
+        public string ConnectionString => Entry.BuildConnectionString(Database);
+
+        public string Describe() =>
+            Entry.Database == Database ? Entry.Describe() : $"{Entry.Describe()} on {Database}";
+
+        // Every result names its target. It is the one guard against a wrong one that does not rely
+        // on the model behaving: a mistake shows in the answer rather than three questions later.
+        public string Stamp(string body) => $"[{Describe()}]{Environment.NewLine}{body}";
+    }
 }
