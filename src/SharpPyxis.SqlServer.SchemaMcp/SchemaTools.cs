@@ -10,10 +10,15 @@ using ModelContextProtocol.Server;
 namespace SharpPyxis.SqlServer.SchemaMcp;
 
 /// <summary>
-/// Two read-only tools with fixed queries, bound to one target at startup. No tool accepts free SQL.
+/// Read-only tools with fixed queries, bound to one database at startup. No tool accepts free SQL.
+/// Object names are schema-qualified: the database is the scope, and the rights granted to the
+/// login are what narrows it.
 /// </summary>
 internal sealed class SchemaTools(SchemaSettings settings)
 {
+    // The object types the server exposes, as sys.objects spells them.
+    private const string ExposedTypes = "'U', 'V', 'P', 'FN', 'IF', 'TF', 'SO'";
+
     /// <summary>
     /// Builds the tools with the target appended to each description. A client that runs several
     /// instances of this server shows the model one set of tools per target, and the description is
@@ -33,47 +38,87 @@ internal sealed class SchemaTools(SchemaSettings settings)
         });
     }
 
-    /// <summary>Lists the objects of the configured schema, optionally filtered on their last change.</summary>
+    /// <summary>Lists the objects of the database, filtered on schema, name, type or last change.</summary>
     [McpServerTool(Name = "list_objects", ReadOnly = true, Idempotent = true)]
-    [Description("Lists the tables, views, procedures, functions and sequences of the configured schema, "
-               + "with their last modification date. Optional filter on that date.")]
+    [Description("Lists the tables, views, procedures, functions and sequences of the database, with their "
+               + "schema and last modification date. A large database holds tens of thousands of objects, so "
+               + "filter whenever the request names a schema, a type or part of a name. When nothing in the "
+               + "request tells you what to filter on, ask the user rather than guess.")]
     public async Task<string> ListObjects(
-        [Description("Only return objects modified since this date (ISO 8601). Optional.")]
+        [Description("Only objects of this schema. Optional, exact match.")]
+        string? schema = null,
+        [Description("Only objects whose name matches. Optional, substring by default.")]
+        string? name = null,
+        [Description("How to match the name: 'contains' (default) or 'equals'.")]
+        string nameMatch = "contains",
+        [Description("Only objects of this kind: 'table', 'view', 'procedure', 'function' or 'sequence'. Optional.")]
+        string? objectType = null,
+        [Description("Only objects modified since this date (ISO 8601). Optional.")]
         DateTime? modifiedSince = null,
+        [Description("At most this many rows. Optional.")]
+        int? limit = null,
+        [Description("Sort by modification date, most recent first, instead of by name. Use it for 'the last N changes'.")]
+        bool mostRecentFirst = false,
         CancellationToken cancellationToken = default)
     {
-        const string query = """
-            SELECT o.type_desc, o.name, o.modify_date
-            FROM sys.objects AS o
-            WHERE o.schema_id = SCHEMA_ID(@schemaName)
-              AND o.type IN ('U', 'V', 'P', 'FN', 'IF', 'TF', 'SO')
-              AND (@modifiedSince IS NULL OR o.modify_date >= @modifiedSince)
-            ORDER BY o.type_desc, o.name;
+        // The NULL first sort key leaves the order to schema and name unless mostRecentFirst is set.
+        var query = $"""
+            select top (@limit) s.name, o.name, o.type_desc, o.modify_date
+            from sys.objects as o
+            join sys.schemas as s on s.schema_id = o.schema_id
+            where o.type in ({ExposedTypes})
+              and (@schema is null or s.name = @schema)
+              and (@namePattern is null or o.name like @namePattern escape '\')
+              and (@modifiedSince is null or o.modify_date >= @modifiedSince)
+              and (@objectType is null
+                   or (@objectType = 'table'     and o.type = 'U')
+                   or (@objectType = 'view'      and o.type = 'V')
+                   or (@objectType = 'procedure' and o.type = 'P')
+                   or (@objectType = 'function'  and o.type in ('FN', 'IF', 'TF'))
+                   or (@objectType = 'sequence'  and o.type = 'SO'))
+            order by case when @mostRecentFirst = 1 then o.modify_date end desc,
+                     s.name,
+                     o.name;
             """;
 
         await using var connection = new SqlConnection(settings.ConnectionString);
         await connection.OpenAsync(cancellationToken);
 
         await using var command = new SqlCommand(query, connection);
-        command.Parameters.Add("@schemaName", SqlDbType.NVarChar, 128).Value = settings.SchemaName;
+        command.Parameters.Add("@limit", SqlDbType.Int).Value = limit ?? int.MaxValue;
+        command.Parameters.Add("@schema", SqlDbType.NVarChar, 128).Value = (object?)schema ?? DBNull.Value;
+        command.Parameters.Add("@namePattern", SqlDbType.NVarChar, 300).Value = (object?)BuildNamePattern(name, nameMatch) ?? DBNull.Value;
+        command.Parameters.Add("@objectType", SqlDbType.NVarChar, 20).Value = (object?)objectType?.ToLowerInvariant() ?? DBNull.Value;
         command.Parameters.Add("@modifiedSince", SqlDbType.DateTime2).Value = (object?)modifiedSince ?? DBNull.Value;
+        command.Parameters.Add("@mostRecentFirst", SqlDbType.Bit).Value = mostRecentFirst;
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
 
         var inventory = new StringBuilder();
         while (await reader.ReadAsync(cancellationToken))
-            inventory.AppendLine($"{reader.GetString(0)}\t{reader.GetString(1)}\t{reader.GetDateTime(2):yyyy-MM-dd HH:mm:ss}");
+            inventory.AppendLine(
+                $"{reader.GetString(2)}\t{reader.GetString(0)}.{reader.GetString(1)}\t{reader.GetDateTime(3):yyyy-MM-dd HH:mm:ss}");
 
         return inventory.Length > 0 ? inventory.ToString() : "No object matches.";
     }
 
-    /// <summary>Scripts one object of the configured schema with SMO, the engine SSMS uses.</summary>
+    /// <summary>Scripts one object with SMO, the engine SSMS uses.</summary>
     [McpServerTool(Name = "script_object", ReadOnly = true, Idempotent = true)]
-    [Description("Returns the complete CREATE script of an object of the configured schema, as SSMS generates it: "
-               + "tables with constraints, indexes and triggers; views, procedures and functions with their original text.")]
+    [Description("Returns the complete CREATE script of one object, as SSMS generates it: tables with "
+               + "constraints, indexes and triggers; views, procedures and functions with their original text.")]
     public string ScriptObject(
-        [Description("Object name, without the schema prefix.")] string objectName)
+        [Description("Object name, schema-qualified ('sales.orders'). An unqualified name is accepted "
+                   + "when exactly one schema holds it.")]
+        string objectName)
     {
+        var (schema, name) = SplitObjectName(objectName);
+
+        var resolved = ResolveSchema(schema, name);
+        if (resolved.Length == 0)
+            return $"Object {objectName} not found.";
+        if (resolved.Length > 1)
+            return $"Several schemas hold an object named {name}. Qualify it: {string.Join(", ", resolved.Select(s => $"{s}.{name}"))}.";
+
         using var sqlConnection = new SqlConnection(settings.ConnectionString);
         var server = new Server(new ServerConnection(sqlConnection));
         try
@@ -81,9 +126,9 @@ internal sealed class SchemaTools(SchemaSettings settings)
             var database = server.Databases[settings.DatabaseName]
                 ?? throw new InvalidOperationException($"Database {settings.DatabaseName} is not accessible.");
 
-            var scriptable = FindScriptable(database, objectName, settings.SchemaName);
+            var scriptable = FindScriptable(database, name, resolved[0]);
             if (scriptable is null)
-                return $"Object {settings.SchemaName}.{objectName} not found.";
+                return $"Object {resolved[0]}.{name} cannot be scripted.";
 
             var statements = scriptable.Script(CreateScriptingOptions());
             return string.Join($"{Environment.NewLine}GO{Environment.NewLine}", statements.Cast<string>())
@@ -95,7 +140,72 @@ internal sealed class SchemaTools(SchemaSettings settings)
         }
     }
 
-    // SMO collections only load what the login can see: here, the one schema it is granted.
+    // Splits on the first dot only: a schema name cannot contain one unless it is quoted, which the
+    // brackets are stripped for.
+    private static (string? Schema, string Name) SplitObjectName(string objectName)
+    {
+        var trimmed = objectName.Trim();
+        var separator = trimmed.IndexOf('.');
+
+        return separator < 0
+            ? (null, Unquote(trimmed))
+            : (Unquote(trimmed[..separator]), Unquote(trimmed[(separator + 1)..]));
+    }
+
+    private static string Unquote(string identifier)
+    {
+        var trimmed = identifier.Trim();
+        return trimmed.Length >= 2 && trimmed[0] == '[' && trimmed[^1] == ']'
+            ? trimmed[1..^1]
+            : trimmed;
+    }
+
+    // Returns the schemas holding an object of that name: none, one, or several to disambiguate.
+    private string[] ResolveSchema(string? schema, string name)
+    {
+        const string query = $"""
+            select s.name
+            from sys.objects as o
+            join sys.schemas as s on s.schema_id = o.schema_id
+            where o.type in ({ExposedTypes})
+              and o.name = @name
+              and (@schema is null or s.name = @schema)
+            order by s.name;
+            """;
+
+        using var connection = new SqlConnection(settings.ConnectionString);
+        connection.Open();
+
+        using var command = new SqlCommand(query, connection);
+        command.Parameters.Add("@name", SqlDbType.NVarChar, 128).Value = name;
+        command.Parameters.Add("@schema", SqlDbType.NVarChar, 128).Value = (object?)schema ?? DBNull.Value;
+
+        using var reader = command.ExecuteReader();
+
+        var schemas = new List<string>();
+        while (reader.Read())
+            schemas.Add(reader.GetString(0));
+
+        return [.. schemas];
+    }
+
+    // Escapes what LIKE would otherwise read as a pattern, so a name holding _ or % still matches.
+    private static string? BuildNamePattern(string? name, string nameMatch)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return null;
+
+        var escaped = name.Replace(@"\", @"\\")
+                          .Replace("[", @"\[")
+                          .Replace("%", @"\%")
+                          .Replace("_", @"\_");
+
+        return string.Equals(nameMatch, "equals", StringComparison.OrdinalIgnoreCase)
+            ? escaped
+            : $"%{escaped}%";
+    }
+
+    // SMO collections only load what the login can see.
     private static IScriptable? FindScriptable(Database database, string name, string schema) =>
         (IScriptable?)database.Tables[name, schema]
         ?? (IScriptable?)database.Views[name, schema]
