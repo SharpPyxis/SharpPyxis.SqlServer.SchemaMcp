@@ -121,7 +121,7 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
                  + ListDatabases(chosen);
 
         _active = new ActiveConnection(chosen, catalog);
-        return $"Selected: {_active.Describe()}";
+        return _active.Stamp("Selected.");
     }
 
     // Filtered by visibility, so this lists what the login may reach and nothing else.
@@ -145,9 +145,14 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
     [Description("Tells how this server is installed and set up: its executable and version, where its "
                + "connections are stored, and the command line that adds, lists, tests or removes them. Call it "
                + "when the user asks how to add, remove or change a connection, or where the server lives. It "
-               + "reads no database and changes nothing: the user runs those commands, in a console.")]
+               + "reads nothing of the database but the rights of the selected login, and changes nothing: the "
+               + "user runs those commands, in a console.")]
     public string ServerInfo()
     {
+        var selected = _active is not { } active
+            ? "none"
+            : active.ReadAccessWarning is { } warning ? $"{active.Describe()}\n{warning}" : active.Describe();
+
         var version = typeof(SchemaTools).Assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "unknown";
 
@@ -162,6 +167,7 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
             Version: {version}
             Connections: {connections}
             Rows returned by a listing, at most: {settings.MaxResults} (DDL_MAX_RESULTS)
+            Selected connection: {selected}
 
             Connections are managed from a console, as "{Environment.ProcessPath}" followed by:
             {Configurator.Commands}
@@ -1105,7 +1111,19 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
     /// <summary>The connection in use, and the database chosen on it.</summary>
     private sealed record ActiveConnection(ConnectionEntry Entry, string Database)
     {
+        // Checked on first use rather than on selection, so that a connection chosen at startup never
+        // holds the handshake on a round trip to the server.
+        private Lazy<string?>? _readAccess;
+
+        private int _announced;
+
         public string ConnectionString => Entry.BuildConnectionString(Database);
+
+        /// <summary>The warning when this login can certainly read the data; null otherwise.</summary>
+        public string? ReadAccessWarning =>
+            (_readAccess ??= new(() => DataAccess.Check(ConnectionString, databaseLevel: true))).Value is { } reason
+                ? DataAccess.Warning(reason)
+                : null;
 
         public string Describe() =>
             Entry.Database == Database ? Entry.Describe() : $"{Entry.Describe()} on {Database}";
@@ -1113,8 +1131,16 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         // Every result names its target. It is the one guard against a wrong one that does not rely
         // on the model behaving: a mistake shows in the answer rather than three questions later.
         //
+        // The warning on reading the data comes once, with the first result after the connection is
+        // chosen: it informs a decision rather than a call, and repeating it would cost tokens on each.
+        //
         // Line endings are normalised here, once, for everything the tools return: a carriage return
         // per line buys a reader nothing and is paid for in tokens on every result.
-        public string Stamp(string body) => $"[{Describe()}]\n{body}".Replace("\r\n", "\n");
+        public string Stamp(string body)
+        {
+            var warning = Interlocked.Exchange(ref _announced, 1) == 0 ? ReadAccessWarning : null;
+            var heading = warning is null ? $"[{Describe()}]" : $"[{Describe()}]\n{warning}";
+            return $"{heading}\n{body}".Replace("\r\n", "\n");
+        }
     }
 }

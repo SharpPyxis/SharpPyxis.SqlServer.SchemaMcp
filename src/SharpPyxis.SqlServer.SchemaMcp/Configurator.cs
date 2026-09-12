@@ -198,6 +198,11 @@ internal static class Configurator
             using var connection = new SqlConnection(entry.BuildConnectionString());
             connection.Open();
             Console.WriteLine("ok.");
+
+            // Said here first: the person choosing the login is reading, and this is where it is chosen.
+            if (DataAccess.Check(connection, databaseLevel: entry.Database is not null) is { } reason)
+                Console.WriteLine($"  Warning: {DataAccess.Warning(reason)}");
+
             return true;
         }
         catch (SqlException exception)
