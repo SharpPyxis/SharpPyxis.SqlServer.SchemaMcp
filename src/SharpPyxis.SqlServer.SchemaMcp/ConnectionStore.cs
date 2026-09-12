@@ -38,6 +38,16 @@ internal sealed class ConnectionStore(string filePath)
         return stored;
     }
 
+    /// <summary>Replaces a connection, matched on its identifier.</summary>
+    public void Replace(ConnectionEntry entry)
+    {
+        var file = ReadFile();
+        WriteFile(file with
+        {
+            Connections = [.. file.Connections.Select(stored => stored.Id == entry.Id ? entry : stored)],
+        });
+    }
+
     /// <summary>
     /// Removes a connection. The identifiers of the others do not move: a rank that renumbers would
     /// make "the 3" name a different connection than the one just discussed.
