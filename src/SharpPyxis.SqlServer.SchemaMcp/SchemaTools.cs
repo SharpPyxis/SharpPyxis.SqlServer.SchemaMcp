@@ -3,6 +3,7 @@ using System.Data;
 using System.Globalization;
 using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 using Microsoft.SqlServer.Management.Common;
 using Microsoft.SqlServer.Management.Smo;
@@ -15,7 +16,7 @@ namespace SharpPyxis.SqlServer.SchemaMcp;
 /// Object names are schema-qualified: the database is the scope, and the rights granted to the
 /// login are what narrows it.
 /// </summary>
-internal sealed class SchemaTools(SchemaSettings settings, ConnectionStore store)
+internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionStore store)
 {
     // The connection every tool works against. Null until one is chosen, which is what makes the
     // model ask instead of picking. A reference assignment is atomic, which is all the concurrency
@@ -386,14 +387,25 @@ internal sealed class SchemaTools(SchemaSettings settings, ConnectionStore store
                 return active.Stamp($"Object {resolved[0]}.{name} cannot be scripted.");
 
             var statements = scriptable.Script(CreateScriptingOptions());
-            return active.Stamp(string.Join($"{Environment.NewLine}GO{Environment.NewLine}", statements.Cast<string>())
-                 + $"{Environment.NewLine}GO{Environment.NewLine}");
+            var script = string.Join($"{Environment.NewLine}GO{Environment.NewLine}", statements.Cast<string>())
+                       + $"{Environment.NewLine}GO{Environment.NewLine}";
+
+            return active.Stamp(CollapseBlankLines(script));
         }
         finally
         {
             server.ConnectionContext.Disconnect();
         }
     }
+
+    // SMO leaves runs of blank lines where it assembled its fragments — eight of them between the
+    // SET statements and the first comment of a view, measured. They carry nothing and cost tokens
+    // on every script returned.
+    private static string CollapseBlankLines(string script) =>
+        BlankLineRun().Replace(script.Replace("\r\n", "\n"), "\n\n");
+
+    [GeneratedRegex(@"\n{3,}")]
+    private static partial Regex BlankLineRun();
 
     // Splits on the first dot only: a schema name cannot contain one unless it is quoted, which the
     // brackets are stripped for.
@@ -492,6 +504,9 @@ internal sealed class SchemaTools(SchemaSettings settings, ConnectionStore store
 
         // Every result names its target. It is the one guard against a wrong one that does not rely
         // on the model behaving: a mistake shows in the answer rather than three questions later.
-        public string Stamp(string body) => $"[{Describe()}]{Environment.NewLine}{body}";
+        //
+        // Line endings are normalised here, once, for everything the tools return: a carriage return
+        // per line buys a reader nothing and is paid for in tokens on every result.
+        public string Stamp(string body) => $"[{Describe()}]\n{body}".Replace("\r\n", "\n");
     }
 }
