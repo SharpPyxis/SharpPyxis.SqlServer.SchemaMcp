@@ -2,4 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/SharpPyxis.SqlServer.SchemaMcp/SharpPyxis.SqlServer.SchemaMcp.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SharpPyxis.SqlServer.SchemaMcp.Tests/SharpPyxis.SqlServer.SchemaMcp.Tests.csproj" />
+  </Folder>
 </Solution>
