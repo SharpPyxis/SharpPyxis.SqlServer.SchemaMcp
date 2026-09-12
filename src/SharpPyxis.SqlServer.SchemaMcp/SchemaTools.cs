@@ -53,7 +53,7 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
     /// </summary>
     public IEnumerable<McpServerTool> CreateTools() =>
         [CreateTool(nameof(UseConnection)), CreateTool(nameof(ServerInfo)),
-         CreateTool(nameof(ListObjects)), CreateTool(nameof(ScriptObject))];
+         CreateTool(nameof(ListObjects)), CreateTool(nameof(ScriptObject)), CreateTool(nameof(FindReferences))];
 
     private McpServerTool CreateTool(string methodName)
     {
@@ -263,11 +263,7 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         var returned = 0;
         while (await reader.ReadAsync(cancellationToken))
         {
-            inventory.Append(CultureInfo.InvariantCulture,
-                $"{reader.GetString(2)}\t{reader.GetString(0)}.{reader.GetString(1)}\t{reader.GetDateTime(3):yyyy-MM-dd HH:mm:ss}\t");
-            if (!reader.IsDBNull(4))
-                inventory.Append(reader.GetInt64(4));
-            inventory.AppendLine();
+            AppendObjectRow(inventory, ReadObjectRow(reader));
             returned++;
         }
 
@@ -398,6 +394,236 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         command.Parameters.Add("@modifiedSince", SqlDbType.DateTime2).Value = (object?)modifiedSince ?? DBNull.Value;
     }
 
+    // Every result of find_references ends with it: a short or empty list is exactly where a reader
+    // would otherwise conclude that nothing depends on an object.
+    private const string DynamicSqlReminder =
+        "Dynamic SQL is not in this graph: a name written inside a string is found by search_modules only.";
+
+    /// <summary>Finds what depends on one object, or what it depends on.</summary>
+    [McpServerTool(Name = "find_references", ReadOnly = true, Idempotent = true)]
+    [Description("Finds the dependencies of one object. By default, what references it: the views, procedures, "
+               + "functions and triggers using it, and the tables whose foreign keys point to it — what a change "
+               + "would affect. With direction 'referenced', what the object uses instead. The graph is the "
+               + "engine's and dynamic SQL is not in it: a name written inside a string is found by "
+               + "search_modules only, so check both before concluding that nothing uses an object.")]
+    public async Task<string> FindReferences(
+        [Description("Object name, schema-qualified ('sales.orders'). An unqualified name is accepted "
+                   + "when exactly one schema holds it.")]
+        string objectName,
+        [Description("'referencing' (default): what uses the object. 'referenced': what the object uses.")]
+        string direction = "referencing",
+        [Description("Only referencing objects of this schema. Optional, exact match; ignored with 'referenced'.")]
+        string? schema = null,
+        [Description("Only referencing objects of this kind: 'table' (through a foreign key), 'view', "
+                   + "'procedure' or 'function'. Optional; ignored with 'referenced'.")]
+        string? objectType = null,
+        [Description("Take at most this many rows, and return them even when many more match.")]
+        int? limit = null,
+        [Description("Return only how many objects reference it, and how they are spread, without any row.")]
+        bool countOnly = false,
+        CancellationToken cancellationToken = default)
+    {
+        if (_active is not { } active)
+            return NoConnectionSelected();
+
+        var (targetSchema, targetName, refusal) = ResolveTarget(active, objectName);
+        if (refusal is not null)
+            return active.Stamp(refusal);
+
+        await using var connection = new SqlConnection(active.ConnectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        var report = string.Equals(direction, "referenced", StringComparison.OrdinalIgnoreCase)
+            ? await ReadReferencedAsync(connection, targetSchema, targetName, cancellationToken)
+            : await ReadReferencingAsync(
+                connection, targetSchema, targetName, schema, objectType, limit, countOnly, cancellationToken);
+
+        return active.Stamp(report);
+    }
+
+    private async Task<string> ReadReferencingAsync(
+        SqlConnection connection, string targetSchema, string targetName, string? schema, string? objectType,
+        int? limit, bool countOnly, CancellationToken cancellationToken)
+    {
+        // The graph holds the modules. Foreign keys are not modules and are read beside it: a table
+        // pointing to this one is as much an impact of a change as a view reading it.
+        var query = $"""
+            declare @target nvarchar(600) = quotename(@targetSchema) + N'.' + quotename(@targetName);
+
+            select s.name, o.name, o.type_desc, o.modify_date, datalength(m.definition) / 2,
+                   cast(null as nvarchar(200))
+            from sys.dm_sql_referencing_entities(@target, N'OBJECT') as r
+            join sys.objects as o on o.object_id = r.referencing_id
+            join sys.schemas as s on s.schema_id = o.schema_id
+            left join sys.sql_modules as m on m.object_id = o.object_id
+            where o.is_ms_shipped = 0
+            {ObjectFilter}
+            union all
+            select s.name, o.name, o.type_desc, o.modify_date, cast(null as bigint), N'foreign key ' + fk.name
+            from sys.foreign_keys as fk
+            join sys.objects as o on o.object_id = fk.parent_object_id
+            join sys.schemas as s on s.schema_id = o.schema_id
+            where fk.referenced_object_id = object_id(@target)
+            {ObjectFilter}
+            order by 1, 2, 6;
+            """;
+
+        await using var command = new SqlCommand(query, connection);
+        AddTargetParameters(command, targetSchema, targetName);
+        AddFilterParameters(command, schema, null, objectType, null);
+
+        var rows = new List<ObjectRow>();
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+                rows.Add(ReadObjectRow(reader));
+        }
+
+        var target = $"{targetSchema}.{targetName}";
+        if (rows.Count == 0)
+            return (schema ?? objectType) is null
+                ? $"Nothing references {target}. {DynamicSqlReminder}"
+                : $"Nothing of that schema or type references {target}. {DynamicSqlReminder}";
+
+        if (countOnly || (limit is null && rows.Count > settings.MaxResults))
+            return DescribeReferenceSpread(rows, target);
+
+        var taken = rows.Take(Math.Min(limit ?? settings.MaxResults, settings.MaxResults)).ToList();
+        var report = new StringBuilder();
+        foreach (var row in taken)
+            AppendObjectRow(report, row);
+
+        if (taken.Count < rows.Count)
+            report.AppendLine($"({taken.Count} of {rows.Count} referencing objects.)");
+
+        return report.Append(DynamicSqlReminder).ToString();
+    }
+
+    private string DescribeReferenceSpread(List<ObjectRow> rows, string target)
+    {
+        var report = new StringBuilder();
+        report.AppendLine(rows.Count > settings.MaxResults
+            ? $"{rows.Count} objects reference {target}, more than the {settings.MaxResults} this server returns at once."
+            : $"{rows.Count} objects reference {target}.");
+        report.AppendLine();
+
+        // By type first: a table used everywhere is used from many schemas, and the kinds of object
+        // split its references better.
+        AppendBreakdown(report, "By type",
+            CountBy(rows, row => row.Note is null ? row.Type : $"{row.Type} (foreign key)"), rows.Count);
+        AppendBreakdown(report, "By schema", CountBy(rows, row => row.Schema), rows.Count);
+
+        report.Append("Narrow with objectType or schema, or pass limit to take the first rows anyway. ");
+        return report.Append(DynamicSqlReminder).ToString();
+    }
+
+    private static Dictionary<string, int> CountBy(List<ObjectRow> rows, Func<ObjectRow, string> key) =>
+        rows.GroupBy(key).ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+
+    private async Task<string> ReadReferencedAsync(
+        SqlConnection connection, string targetSchema, string targetName, CancellationToken cancellationToken)
+    {
+        // Two statements rather than a union, so the foreign keys never depend on how the engine treats
+        // a broken module.
+        const string query = """
+            declare @target nvarchar(600) = quotename(@targetSchema) + N'.' + quotename(@targetName);
+
+            select o.type_desc, s.name + N'.' + o.name, N'foreign key ' + fk.name
+            from sys.foreign_keys as fk
+            join sys.objects as o on o.object_id = fk.referenced_object_id
+            join sys.schemas as s on s.schema_id = o.schema_id
+            where fk.parent_object_id = object_id(@target)
+            order by 2, 3;
+
+            select coalesce(o.type_desc,
+                            case when r.referenced_class_desc <> N'OBJECT_OR_COLUMN' then r.referenced_class_desc end),
+                   r.referenced_server_name, r.referenced_database_name, r.referenced_schema_name,
+                   r.referenced_entity_name,
+                   case when r.referenced_id is null then N'unresolved'
+                        when r.is_ambiguous = 1 then N'ambiguous' end
+            from sys.dm_sql_referenced_entities(@target, N'OBJECT') as r
+            left join sys.objects as o
+                   on o.object_id = r.referenced_id
+                  and r.referenced_database_name is null
+                  and r.referenced_server_name is null
+            where r.referenced_minor_name is null
+            order by 3, 4, 5;
+            """;
+
+        // Error 2020 comes with the rows of a module that names an object which does not exist, and as
+        // an exception it would lose them — the very rows saying which object. Read as a message, it
+        // leaves them in place and tells that the module is broken.
+        var errors = new List<SqlError>();
+        connection.FireInfoMessageEventOnUserErrors = true;
+        connection.InfoMessage += (_, message) =>
+            errors.AddRange(message.Errors.Cast<SqlError>().Where(error => error.Class > 10));
+
+        await using var command = new SqlCommand(query, connection);
+        AddTargetParameters(command, targetSchema, targetName);
+
+        var lines = new List<string>();
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+                lines.Add($"{reader.GetString(0)}\t{reader.GetString(1)}\t{reader.GetString(2)}");
+
+            await reader.NextResultAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var type = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+                var name = string.Join('.', Enumerable.Range(1, 4).Where(i => !reader.IsDBNull(i)).Select(reader.GetString));
+                lines.Add(reader.IsDBNull(5) ? $"{type}\t{name}" : $"{type}\t{name}\t{reader.GetString(5)}");
+            }
+        }
+
+        // 2020 is the one error expected here. Any other, read as a message, would pass in silence.
+        if (errors.FirstOrDefault(error => error.Number != 2020) is { } unexpected)
+            throw new InvalidOperationException(unexpected.Message);
+
+        var incomplete = errors.Count > 0;
+
+        var target = $"{targetSchema}.{targetName}";
+        var report = new StringBuilder();
+        if (lines.Count == 0 && !incomplete)
+            report.Append($"{target} references no other object. ");
+
+        foreach (var line in lines.Take(settings.MaxResults))
+            report.AppendLine(line);
+
+        if (lines.Count > settings.MaxResults)
+            report.AppendLine($"({settings.MaxResults} of {lines.Count} referenced objects.)");
+
+        if (incomplete)
+            report.AppendLine($"The engine could not resolve every reference of {target}: it names an object that "
+                            + "does not exist, or holds an error. It may no longer compile.");
+
+        return report.Append(DynamicSqlReminder).ToString();
+    }
+
+    private static void AddTargetParameters(SqlCommand command, string schema, string name)
+    {
+        command.Parameters.Add("@targetSchema", SqlDbType.NVarChar, 128).Value = schema;
+        command.Parameters.Add("@targetName", SqlDbType.NVarChar, 128).Value = name;
+    }
+
+    // Columns: schema, name, type, modification date, length of the text, and an optional note.
+    private static ObjectRow ReadObjectRow(SqlDataReader reader) => new(
+        reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetDateTime(3),
+        reader.IsDBNull(4) ? null : reader.GetInt64(4),
+        reader.FieldCount > 5 && !reader.IsDBNull(5) ? reader.GetString(5) : null);
+
+    // The one row format of the tools that list objects, so a reader learns it once.
+    private static void AppendObjectRow(StringBuilder report, ObjectRow row)
+    {
+        report.Append(CultureInfo.InvariantCulture,
+            $"{row.Type}\t{row.Schema}.{row.Name}\t{row.Modified:yyyy-MM-dd HH:mm:ss}\t{row.Chars}");
+
+        if (row.Note is not null)
+            report.Append('\t').Append(row.Note);
+
+        report.AppendLine();
+    }
+
     /// <summary>Scripts one object with SMO, the engine SSMS uses.</summary>
     [McpServerTool(Name = "script_object", ReadOnly = true, Idempotent = true)]
     [Description("Returns the complete CREATE script of one object, as SSMS generates it: tables with "
@@ -412,14 +638,9 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         if (_active is not { } active)
             return NoConnectionSelected();
 
-        var (schema, name) = SplitObjectName(objectName);
-
-        var resolved = ResolveSchema(active, schema, name);
-        if (resolved.Length == 0)
-            return active.Stamp($"Object {objectName} not found.");
-        if (resolved.Length > 1)
-            return active.Stamp(
-                $"Several schemas hold an object named {name}. Qualify it: {string.Join(", ", resolved.Select(s => $"{s}.{name}"))}.");
+        var (schema, name, refusal) = ResolveTarget(active, objectName);
+        if (refusal is not null)
+            return active.Stamp(refusal);
 
         using var sqlConnection = new SqlConnection(active.ConnectionString);
         var server = new Server(new ServerConnection(sqlConnection));
@@ -428,9 +649,9 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
             var database = server.Databases[active.Database]
                 ?? throw new InvalidOperationException($"Database {active.Database} is not accessible.");
 
-            var scriptable = FindScriptable(database, name, resolved[0]);
+            var scriptable = FindScriptable(database, name, schema);
             if (scriptable is null)
-                return active.Stamp($"Object {resolved[0]}.{name} cannot be scripted.");
+                return active.Stamp($"Object {schema}.{name} cannot be scripted.");
 
             var statements = scriptable.Script(CreateScriptingOptions());
             var script = string.Join($"{Environment.NewLine}GO{Environment.NewLine}", statements.Cast<string>())
@@ -471,6 +692,20 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         return trimmed.Length >= 2 && trimmed[0] == '[' && trimmed[^1] == ']'
             ? trimmed[1..^1]
             : trimmed;
+    }
+
+    // Resolves a name, qualified or not, to the one schema holding it — or says why it cannot.
+    private static (string Schema, string Name, string? Refusal) ResolveTarget(ActiveConnection active, string objectName)
+    {
+        var (schema, name) = SplitObjectName(objectName);
+
+        return ResolveSchema(active, schema, name) switch
+        {
+            [] => (string.Empty, name, $"Object {objectName} not found."),
+            [var only] => (only, name, null),
+            var several => (string.Empty, name,
+                $"Several schemas hold an object named {name}. Qualify it: {string.Join(", ", several.Select(s => $"{s}.{name}"))}."),
+        };
     }
 
     // Returns the schemas holding an object of that name: none, one, or several to disambiguate.
@@ -539,6 +774,8 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
     };
 
     private sealed record Spread(int Total, Dictionary<string, int> BySchema, Dictionary<string, int> ByType);
+
+    private sealed record ObjectRow(string Schema, string Name, string Type, DateTime Modified, long? Chars, string? Note);
 
     /// <summary>The connection in use, and the database chosen on it.</summary>
     private sealed record ActiveConnection(ConnectionEntry Entry, string Database)
