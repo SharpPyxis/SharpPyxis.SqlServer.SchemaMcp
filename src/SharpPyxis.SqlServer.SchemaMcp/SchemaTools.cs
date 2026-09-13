@@ -659,6 +659,10 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
                   and r.referenced_database_name is null
                   and r.referenced_server_name is null
             where r.referenced_minor_name is null
+              -- The pseudo-tables of a trigger, which the engine ties to its table: not objects of the database.
+              and not (objectproperty(object_id(@target), 'IsTrigger') = 1
+                       and r.referenced_schema_name is null
+                       and upper(r.referenced_entity_name) in (N'INSERTED', N'DELETED'))
             order by 3, 4, 5;
             """;
 
