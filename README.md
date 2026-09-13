@@ -358,8 +358,9 @@ For the same reason, `describe_object` is the tool to know the structure of a ta
 of a production database, it returned about a sixth of what `script_object` returned, in one second
 rather than forty.
 
-Finally, the description of the eight tools takes about 2,300 tokens in every conversation of the
-client, even when the conversation has nothing to do with a database.
+Finally, the definitions of the nine tools take about 3,000 tokens. A client that loads its tools in
+advance pays them in every conversation, even one that has nothing to do with a database. A client
+that loads its tools on demand pays them only when a conversation looks for them.
 
 ### To the SQL Server instance
 
