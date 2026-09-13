@@ -5,6 +5,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>SharpPyxis.SqlServer.SchemaMcp</RootNamespace>
     <AssemblyName>schema-mcp</AssemblyName>
+    <Version>0.1.0</Version>
     <!-- SMO relies on reflection, which trimming does not follow. -->
     <PublishTrimmed>false</PublishTrimmed>
   </PropertyGroup>
