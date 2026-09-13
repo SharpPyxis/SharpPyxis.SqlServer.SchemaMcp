@@ -40,8 +40,9 @@ l'entrée et la sortie standard du programme. La norme MCP appelle cela un serve
 Trois conséquences en découlent.
 
 L'application d'IA doit être installée sur le même ordinateur, et elle doit prendre en charge les
-serveurs MCP locaux. C'est le cas de Claude Desktop, le client avec lequel ce serveur MCP est testé.
-Un chat ouvert dans un navigateur web s'exécute sur les serveurs de son fournisseur : il ne peut pas
+serveurs MCP locaux. Ce serveur MCP est testé avec Claude Desktop, et vérifié avec Claude Code et avec
+GitHub Copilot dans VS Code. Tout client MCP capable de lancer un serveur local convient aussi. Un
+chat ouvert dans un navigateur web s'exécute sur les serveurs de son fournisseur : il ne peut pas
 lancer un programme sur votre ordinateur, et ne peut donc pas utiliser ce serveur MCP, quel que soit
 son fournisseur.
 
@@ -508,25 +509,33 @@ changez de machine, les connexions sont à déclarer de nouveau.
 
 ### Le client
 
-Pour Claude Desktop, la déclaration se place dans le fichier `claude_desktop_config.json` :
+Le client est l'application d'IA qui lance le serveur MCP. Chaque client déclare ses serveurs MCP dans
+un fichier de configuration qui lui est propre, et dont le format change d'un client à l'autre, parfois
+d'une version à la suivante. Ce README ne le décrit donc pour aucun client en particulier. La
+déclaration dépend de l'application, quel que soit le modèle d'IA qu'elle fait tourner.
 
-```json
-{
-  "mcpServers": {
-    "sqlserver-schema": {
-      "command": "C:\\Tools\\SchemaMcp\\schema-mcp.exe",
-      "env": { "DDL_CONFIG_PATH": "C:\\Tools\\SchemaMcp\\connections.dat" }
-    }
-  }
-}
-```
+La déclaration tient en trois informations, les mêmes pour tous les clients :
 
-`DDL_CONFIG_PATH` indique où se trouve le fichier des connexions. Cette ligne est facultative : sans
-elle, le fichier se trouve dans le dossier `%APPDATA%` de votre compte.
+- un nom pour le serveur MCP, par exemple `sqlserver-schema`. Le client s'en sert pour désigner les
+  outils du serveur ;
+- la commande qui lance le serveur MCP : le chemin complet de l'exécutable, par exemple
+  `C:\Tools\SchemaMcp\schema-mcp.exe` ;
+- la variable d'environnement `DDL_CONFIG_PATH`, qui indique où se trouve le fichier des connexions.
+  Elle est facultative : sans elle, le fichier se trouve dans le dossier `%APPDATA%` de votre compte.
 
-Tout client MCP capable de lancer un serveur en stdio convient, pas seulement Claude Desktop. Le
-serveur MCP n'ouvre aucun port réseau. Sa seule connexion est celle qu'il établit vers l'instance SQL
-Server.
+Le plus simple est de demander à l'agent de votre client d'écrire cette déclaration. Donnez-lui ces
+trois informations, et demandez-lui où son application déclare les serveurs MCP locaux. L'agent
+connaît en général l'application qui le fait tourner, et il peut lire son fichier de configuration. Ce
+qu'il en sait peut toutefois dater d'une version précédente, comme la documentation en ligne : le
+contrôle qui suit tranche.
+
+La plupart des clients lisent leur configuration au démarrage. Relancez donc le vôtre après la
+déclaration, puis demandez à l'agent quelle version du serveur MCP tourne. Pour répondre, l'agent
+appelle l'outil `server_info`, qui rend le chemin de l'exécutable, sa version et la connexion
+sélectionnée. Si l'agent ne trouve pas cet outil, le client n'a pas chargé le serveur MCP.
+
+Le serveur MCP n'ouvre aucun port réseau. Sa seule connexion est celle qu'il établit vers l'instance
+SQL Server.
 
 Si vous avez déclaré plusieurs connexions, aucune n'est choisie au démarrage. L'agent vous demande
 alors sur quelle base travailler, et il ne passe à une autre que si vous le lui demandez. Chaque

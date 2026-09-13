@@ -36,7 +36,8 @@ of the program. The MCP standard calls this a local server.
 Three things follow.
 
 The AI application has to be installed on the same computer, and it has to support local MCP
-servers. Claude Desktop does, and it is the client this MCP server is tested with. A chat opened in a
+servers. This MCP server is tested with Claude Desktop, and checked with Claude Code and with GitHub
+Copilot in VS Code. Any MCP client that can start a local server will do as well. A chat opened in a
 web browser runs on the servers of its provider: it cannot start a program on your computer, so it
 cannot use this MCP server, whoever the provider is.
 
@@ -489,24 +490,32 @@ machine, the connections have to be declared again.
 
 ### The client
 
-For Claude Desktop, the declaration goes in the file `claude_desktop_config.json`:
+The client is the AI application that starts the MCP server. Each client declares its MCP servers in a
+configuration file of its own, whose format differs from one client to another, and sometimes from one
+version to the next. This README therefore describes it for no client in particular. The declaration
+depends on the application, whatever AI model it runs.
 
-```json
-{
-  "mcpServers": {
-    "sqlserver-schema": {
-      "command": "C:\\Tools\\SchemaMcp\\schema-mcp.exe",
-      "env": { "DDL_CONFIG_PATH": "C:\\Tools\\SchemaMcp\\connections.dat" }
-    }
-  }
-}
-```
+The declaration comes down to three pieces of information, the same for every client:
 
-`DDL_CONFIG_PATH` tells where the file of connections is. This line is optional: without it, the file
-is in the `%APPDATA%` folder of your account.
+- a name for the MCP server, for example `sqlserver-schema`. The client uses it to designate the tools
+  of the server;
+- the command that starts the MCP server: the full path of the executable, for example
+  `C:\Tools\SchemaMcp\schema-mcp.exe`;
+- the environment variable `DDL_CONFIG_PATH`, which tells where the file of connections is. It is
+  optional: without it, the file is in the `%APPDATA%` folder of your account.
 
-Any MCP client that can start a server over stdio will do, not only Claude Desktop. The MCP server opens
-no network port. Its only connection is the one it makes to the SQL Server instance.
+The simplest way is to ask the agent of your client to write this declaration. Give it these three
+pieces of information, and ask it where its application declares local MCP servers. The agent usually
+knows the application it runs in, and it can read its configuration file. What it knows may date from
+an earlier version, though, as online documentation may: the check below settles it.
+
+Most clients read their configuration at startup. Restart yours after the declaration, then ask the
+agent which version of the MCP server is running. To answer, the agent calls the tool `server_info`,
+which returns the path of the executable, its version and the selected connection. If the agent does
+not find this tool, the client has not loaded the MCP server.
+
+The MCP server opens no network port. Its only connection is the one it makes to the SQL Server
+instance.
 
 If you have declared several connections, none is chosen at startup. The agent then asks you which
 database to work on, and it only switches to another one when you ask it to. Every result names the
