@@ -97,6 +97,14 @@ public sealed class FindReferencesTests(DemoDatabase database)
     }
 
     [Fact]
+    public async Task ATriggerIsFoundByName()
+    {
+        var result = await database.CreateTools().FindReferences("logistics.tr_stock_movement_touch", direction: "referenced");
+
+        Assert.Contains("logistics.tr_stock_movement_touch references no other object.", result);
+    }
+
+    [Fact]
     public async Task AnObjectNobodyUsesIsReportedWithTheReminder()
     {
         var result = await database.CreateTools().FindReferences("[legacy].[odd[name]");

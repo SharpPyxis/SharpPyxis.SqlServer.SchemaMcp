@@ -39,6 +39,15 @@ public sealed class ScriptObjectTests(DemoDatabase database)
     }
 
     [Fact]
+    public void ATriggerIsScriptedFromUnderItsTable()
+    {
+        var result = database.CreateTools().ScriptObject("logistics.tr_stock_movement_touch");
+
+        Assert.Contains("tr_stock_movement_touch", result);
+        Assert.Contains("after insert", result, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void AnUnknownObjectIsReported()
     {
         var result = database.CreateTools().ScriptObject("sales.nothing");

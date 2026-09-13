@@ -45,6 +45,15 @@ public sealed class DescribeObjectTests(DemoDatabase database)
     }
 
     [Fact]
+    public void ATriggerGivesTheTableItFiresOnAndWhen()
+    {
+        var result = database.CreateTools().DescribeObject("logistics.tr_stock_movement_touch");
+
+        Assert.Contains("trigger\tlogistics.tr_stock_movement_touch", result);
+        Assert.Contains("On: logistics.stock_movement, after insert", result);
+    }
+
+    [Fact]
     public void AViewGivesItsColumnsAndNoRowCount()
     {
         var result = database.CreateTools().DescribeObject("sales.order_summary");

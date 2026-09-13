@@ -24,7 +24,7 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
     private ActiveConnection? _active = OpenByDefault(settings, store);
 
     // The object types the server exposes, as sys.objects spells them.
-    private const string ExposedTypes = "'U', 'V', 'P', 'FN', 'IF', 'TF', 'SO'";
+    private const string ExposedTypes = "'U', 'V', 'P', 'FN', 'IF', 'TF', 'TR', 'SO'";
 
     // The word a type is written with in every result: the one objectType accepts, so what a result
     // shows can be passed back as a filter, and a few tokens where the catalog name costs several.
@@ -59,6 +59,7 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
                or (@objectType = 'view'      and o.type = 'V')
                or (@objectType = 'procedure' and o.type = 'P')
                or (@objectType = 'function'  and o.type in ('FN', 'IF', 'TF'))
+               or (@objectType = 'trigger'   and o.type = 'TR')
                or (@objectType = 'sequence'  and o.type = 'SO'))
         """;
 
@@ -245,9 +246,9 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
 
     /// <summary>Lists the objects of the database, filtered on schema, name, type or last change.</summary>
     [McpServerTool(Name = "list_objects", ReadOnly = true, Idempotent = true)]
-    [Description("Lists the tables, views, procedures, functions and sequences of a SQL Server database, with "
+    [Description("Lists the tables, views, procedures, functions, triggers and sequences of a SQL Server database, with "
                + "their schema and last modification date; for a table, its approximate number of rows as the "
-               + "catalog keeps it, the rows themselves not being read; for a view, procedure or function, the "
+               + "catalog keeps it, the rows themselves not being read; for a view, procedure, function or trigger, the "
                + "length of its text in characters, what script_object would cost to read. Use it to find a "
                + "table by its name, take stock of a schema, or list the objects changed recently. When the "
                + "name is known, pass nameMatch 'equals': 'contains' also returns every longer name holding it. "
@@ -262,7 +263,7 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         [Description("How to match the name: 'contains' (default) or 'equals'. Both follow the collation of "
                    + "the database, which is usually case-insensitive: 'equals' is not a strict comparison.")]
         string nameMatch = "contains",
-        [Description("Only objects of this kind: 'table', 'view', 'procedure', 'function' or 'sequence'. Optional.")]
+        [Description("Only objects of this kind: 'table', 'view', 'procedure', 'function', 'trigger' or 'sequence'. Optional.")]
         string? objectType = null,
         [Description("Only objects modified since this date (ISO 8601). Optional.")]
         DateTime? modifiedSince = null,
@@ -500,7 +501,7 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         [Description("Only referencing objects of this schema. Optional, exact match; ignored with 'referenced'.")]
         string? schema = null,
         [Description("Only referencing objects of this kind: 'table' (through a foreign key), 'view', "
-                   + "'procedure' or 'function'. Optional; ignored with 'referenced'.")]
+                   + "'procedure', 'function' or 'trigger'. Optional; ignored with 'referenced'.")]
         string? objectType = null,
         [Description("Take at most this many rows, and return them even when many more match.")]
         int? limit = null,
@@ -784,7 +785,7 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         string? schema = null,
         [Description("Only modules whose name contains this. Optional.")]
         string? name = null,
-        [Description("Only modules of this kind: 'view', 'procedure' or 'function'. Optional.")]
+        [Description("Only modules of this kind: 'view', 'procedure', 'function' or 'trigger'. Optional.")]
         string? objectType = null,
         [Description("Lines shown before and after each occurrence, from 0 (default) to 10. The numbers are "
                    + "those of the stored text, and can drift from the lines script_object returns.")]
@@ -1139,15 +1140,23 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
                cast(minimum_value as nvarchar(40)), cast(maximum_value as nvarchar(40)), is_cycling
         from sys.sequences
         where object_id = @id;
+
+        select object_schema_name(t.parent_id) + N'.' + object_name(t.parent_id), t.is_instead_of_trigger,
+               t.is_disabled
+        from sys.triggers as t
+        where t.object_id = @id and t.parent_class = 1;
+
+        select lower(type_desc) from sys.trigger_events where object_id = @id order by type;
         """;
 
     /// <summary>Describes the structure of one object, in a compact form.</summary>
     [McpServerTool(Name = "describe_object", ReadOnly = true, Idempotent = true)]
-    [Description("Describes the structure of one table, view, procedure or function of a SQL Server database, "
+    [Description("Describes the structure of one table, view, procedure, function or trigger of a SQL Server database, "
                + "in a compact form. For a table: its approximate number "
                + "of rows, its columns with their types, nullability, identity, defaults and computed expressions, "
                + "its keys, indexes, outgoing foreign keys, checks and triggers. For a view: its columns. For a "
-               + "procedure or a function: its parameters. Use it to write a query against the object; for the "
+               + "procedure or a function: its parameters. For a trigger: the table it fires on, and when. Use it "
+               + "to write a query against the object; for the "
                + "exact DDL, to change the object, use script_object.")]
     public string DescribeObject(
         [Description("Object name, schema-qualified ('sales.orders'). An unqualified name is accepted "
@@ -1298,13 +1307,27 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
             report.AppendLine($"Sequence: {reader.GetString(0)}, start {reader.GetString(1)}, increment {reader.GetString(2)}, "
                             + $"minimum {reader.GetString(3)}, maximum {reader.GetString(4)}{(reader.GetBoolean(5) ? ", cycling" : string.Empty)}");
 
+        // A trigger: the table or view it fires on, when, and on which statements.
+        reader.NextResult();
+        (string On, bool InsteadOf, bool Disabled)? trigger =
+            reader.Read() ? (reader.GetString(0), reader.GetBoolean(1), reader.GetBoolean(2)) : null;
+
+        reader.NextResult();
+        var events = new List<string>();
+        while (reader.Read())
+            events.Add(reader.GetString(0));
+
+        if (trigger is { } fires)
+            report.AppendLine($"On: {fires.On}, {(fires.InsteadOf ? "instead of" : "after")} {string.Join(", ", events)}"
+                              + (fires.Disabled ? " (disabled)" : string.Empty));
+
         return active.Stamp(report.ToString());
     }
 
     /// <summary>Scripts one object with SMO, the engine SSMS uses.</summary>
     [McpServerTool(Name = "script_object", ReadOnly = true, Idempotent = true)]
     [Description("Returns the complete CREATE script of one object of a SQL Server database, as SSMS generates "
-               + "it: tables with constraints, indexes and triggers; views, procedures and functions with their "
+               + "it: tables with constraints, indexes and triggers; views, procedures, functions and triggers with their "
                + "original text. Use it to change or rewrite an object, or to see how existing code is written. "
                + "A procedure can run to hundreds of thousands of characters: when the object may be large, "
                + "read its length in list_objects first.")]
@@ -1327,7 +1350,13 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
             var database = server.Databases[active.Database]
                 ?? throw new InvalidOperationException($"Database {active.Database} is not accessible.");
 
-            var scriptable = FindScriptable(database, name, schema);
+            // SMO keeps a trigger under its table or view, never in the database: its parent says where
+            // to look. Asked only once the other collections came back empty, so it costs nothing to them.
+            var scriptable = FindScriptable(database, name, schema)
+                             ?? (ReadTriggerParent(active, schema, name) is { } parent
+                                 ? (IScriptable?)database.Tables[parent.Name, parent.Schema]?.Triggers[name]
+                                   ?? database.Views[parent.Name, parent.Schema]?.Triggers[name]
+                                 : null);
             if (scriptable is null)
                 return active.Stamp($"Object {schema}.{name} cannot be scripted.");
 
@@ -1438,6 +1467,24 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         ?? (IScriptable?)database.StoredProcedures[name, schema]
         ?? (IScriptable?)database.UserDefinedFunctions[name, schema]
         ?? database.Sequences[name, schema];
+
+    // The table or view a DML trigger belongs to; null for anything else.
+    private static (string Schema, string Name)? ReadTriggerParent(ActiveConnection active, string schema, string name)
+    {
+        using var connection = new SqlConnection(active.ConnectionString);
+        connection.Open();
+
+        using var command = new SqlCommand("""
+            select object_schema_name(t.parent_id), object_name(t.parent_id)
+            from sys.triggers as t
+            where t.object_id = object_id(quotename(@schema) + N'.' + quotename(@name)) and t.parent_class = 1;
+            """, connection);
+        command.Parameters.Add("@schema", SqlDbType.NVarChar, 128).Value = schema;
+        command.Parameters.Add("@name", SqlDbType.NVarChar, 128).Value = name;
+
+        using var reader = command.ExecuteReader();
+        return reader.Read() ? (reader.GetString(0), reader.GetString(1)) : null;
+    }
 
     // Close to the SSMS defaults of "Generate and Publish Scripts".
     private static ScriptingOptions CreateScriptingOptions() => new()

@@ -333,8 +333,8 @@ The MCP server offers eight tools, and a ninth when you provide a conventions fi
 
 | Tool | What it returns |
 | --- | --- |
-| `list_objects` | The list of tables, views, procedures, functions and sequences. It can be filtered by schema, name, object type or modification date. For each table, it gives its approximate number of rows, which shows at once the main table among its satellites. For each view, procedure or function, it gives the length of its text: the agent knows what an object will cost to read before asking for it. |
-| `describe_object` | A compact summary of the structure of an object. For a table: its approximate number of rows, its columns and their types, its keys, indexes, foreign keys, checks and triggers. For a view: its columns. For a procedure or a function: its parameters. On request, the descriptions (`MS_Description`) of the object and of its columns. |
+| `list_objects` | The list of tables, views, procedures, functions, triggers and sequences. It can be filtered by schema, name, object type or modification date. For each table, it gives its approximate number of rows, which shows at once the main table among its satellites. For each view, procedure, function or trigger, it gives the length of its text: the agent knows what an object will cost to read before asking for it. |
+| `describe_object` | A compact summary of the structure of an object. For a table: its approximate number of rows, its columns and their types, its keys, indexes, foreign keys, checks and triggers. For a view: its columns. For a procedure or a function: its parameters. For a trigger: the table it fires on, and when. On request, the descriptions (`MS_Description`) of the object and of its columns. |
 | `script_object` | The complete `CREATE` script of an object, as SSMS produces it. The agent uses it when it has to change the object, and `describe_object` when it only needs to know its structure. |
 | `find_references` | What uses an object: the views, procedures, functions and triggers that rely on it, and the tables whose foreign keys point to it. Or, the other way round, what that object uses. |
 | `search_modules` | The lines of the text of views, procedures, functions and triggers that contain a fragment, with their line numbers and, on request, a few lines around them. |
@@ -384,6 +384,8 @@ conventions of one team, published as an example, and nothing more.
   find it.
 - The modification date of a table also changes when one of its indexes changes. For views, procedures
   and functions, it does show the last change to the code.
+- Database triggers, the ones that fire on DDL statements, are not covered: they belong to no schema.
+  Triggers on tables and views are.
 
 ## What it costs
 

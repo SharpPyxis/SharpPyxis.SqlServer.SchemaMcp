@@ -42,6 +42,15 @@ public sealed class ListObjectsTests(DemoDatabase database)
     }
 
     [Fact]
+    public async Task TriggersAreListedWithTheLengthOfTheirText()
+    {
+        var row = Assert.Single(ToolOutput.Rows(await database.CreateTools().ListObjects(objectType: "trigger"))).Split('\t');
+
+        Assert.Equal(("trigger", "logistics.tr_stock_movement_touch"), (row[0], row[1]));
+        Assert.True(long.Parse(row[4]) > 0);
+    }
+
+    [Fact]
     public async Task LengthIsGivenForModulesAndLeftEmptyForTables()
     {
         var rows = ToolOutput.Rows(await database.CreateTools().ListObjects(schema: "sales"));
