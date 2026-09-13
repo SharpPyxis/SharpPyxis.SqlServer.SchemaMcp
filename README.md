@@ -519,4 +519,9 @@ against it, and then drop it.
 
 ## License
 
-MIT.
+The code of this repository is under the MIT license, in `LICENSE`.
+
+The executable published in the releases also contains the .NET runtime and third-party libraries,
+each under its own license: `THIRD-PARTY-NOTICES.md` lists them. One of them,
+`Microsoft.Data.SqlClient.SNI`, is not open source. It is distributed under the Microsoft Software
+License Terms, which apply to your use of it.
