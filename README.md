@@ -23,7 +23,31 @@ of tables and columns, their types, the procedures that use a table. The SQL it 
 real database, not on what it assumes.
 
 For a DBA or an IT manager, the question is a different one: what can this agent do on the database,
-and how can that be checked? The next part answers it.
+and how can that be checked? *What guarantees that the agent does not read the data*, below, answers it.
+
+## Where it runs
+
+The MCP server is a program that runs on your own computer, next to the AI application that uses it.
+That application starts it when it needs it, and talks to it through the standard input and output
+of the program. The MCP standard calls this a local server.
+
+Three things follow.
+
+The AI application has to be installed on the same computer, and it has to support local MCP
+servers. Claude Desktop does, and it is the client this MCP server is tested with. A chat opened in a
+web browser runs on the servers of its provider: it cannot start a program on your computer, so it
+cannot use this MCP server, whoever the provider is.
+
+The computer has to run Windows. The MCP server keeps your connections in a file encrypted with
+DPAPI, an encryption mechanism of Windows (see *The connections*, below).
+
+The computer has to reach the SQL Server instance over the network, as SSMS would. The MCP server
+opens no network port: its only connection is the one it makes to the instance, with the login you
+give it.
+
+Whatever the MCP server returns becomes part of the conversation. It is therefore sent to the
+provider of the AI model, like the rest of what you type. What it returns is the structure of the
+database, and never its data: the next part explains what guarantees that.
 
 ## What guarantees that the agent does not read the data
 

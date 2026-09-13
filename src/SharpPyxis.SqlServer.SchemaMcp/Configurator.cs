@@ -15,6 +15,17 @@ internal static class Configurator
     /// <summary>Runs the sub-command and returns the process exit code.</summary>
     public static int Run(ConnectionStore store, string[] arguments)
     {
+        // Checked before anything is asked: otherwise 'add' takes every answer, the password included,
+        // and fails only when it writes the file.
+        if (!OperatingSystem.IsWindows())
+        {
+            Console.Error.WriteLine(
+                "'configure' keeps the connections in a file encrypted with DPAPI, which exists on Windows only.\n"
+                + "Outside Windows, declare one connection with the CONNECTION_STRING environment variable, in the\n"
+                + "configuration of the MCP client. Its password is then written there in plain text.");
+            return 1;
+        }
+
         // No verb prints the help. Starting an interactive prompt on a bare command hides the other
         // sub-commands from whoever did not already know they existed.
         if (arguments.Length <= 1)
