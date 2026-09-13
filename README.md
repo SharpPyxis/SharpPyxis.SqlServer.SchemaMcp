@@ -100,7 +100,7 @@ select serverproperty('IsIntegratedSecurityOnly') as windows_only;
 A result of 1 means the instance accepts Windows authentication only. Switching to mixed mode is done in
 the properties of the server, on the Security page, and requires a restart of the service. That decision
 belongs to the DBA. If the instance has to stay in Windows authentication only, the MCP server can
-connect with a Windows account instead: see *With a Windows account*, below.
+connect with a Windows account instead, with a limit explained in *With a Windows account*, below.
 
 #### Step 2 — Create the login
 
@@ -263,10 +263,33 @@ to every user of the database. They deserve a look, whatever you decide about th
 
 #### With a Windows account
 
-The MCP server can also connect with a Windows account instead of a SQL Server login. In that case, the
-rights of that account apply. The guarantee then rests entirely on them, and checking them is up to you.
-The simplest way is to run the script of step 3 while connected with that account. And to give it
-exactly the rights of the login of step 2, add it to the role the script created.
+The MCP server can also connect with Windows authentication instead of a SQL Server login. It then
+connects as the Windows account that started the AI application: in practice, your own account, the
+one you also use in SSMS.
+
+This changes what the rights can guarantee. The working loop of this MCP server involves two
+identities: the agent reads the structure with the rights of the MCP server, and you apply the scripts
+it proposes with your own rights. With Windows authentication, these two identities are one and the
+same.
+
+- If your account keeps the rights you work with, the MCP server holds them too. It still runs only
+  its own queries, which read the catalog, so this MCP server will not change your database. But the
+  guarantee then rests on its code, and no longer on the rights.
+- If your account is limited to `VIEW DEFINITION`, the guarantee holds again, but you can no longer
+  apply anything with that account. The MCP server then serves to read and review code, not to change
+  it.
+
+A SQL Server login dedicated to the MCP server, as created in step 2, keeps the two identities apart.
+Windows authentication suits an account that only reads, for a review or an audit.
+
+The rights of the login bound this MCP server, and nothing else. Your AI application may give the
+agent other tools: another MCP server that runs SQL, or a command line that can start `sqlcmd`. Those
+tools run under your Windows account, whichever way this MCP server connects, and with the rights of
+that account. Check what they can do too.
+
+Whichever account you use, its rights apply, and checking them is up to you. The simplest way is to run
+the script of step 3 while connected with that account. To give it exactly the rights of the login of
+step 2, add it to the role the script created.
 
 The MCP server cannot make that check for you. An account can be restricted on some tables and not on
 others. No global check can state that it reads nothing.
