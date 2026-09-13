@@ -138,7 +138,8 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
     public string UseConnection(
         [Description("Identifier of the connection, as listed in this tool's description. Omit to list them.")]
         int? id = null,
-        [Description("Database to work on. Required when the connection names a server only.")]
+        [Description("Database to work on, for a connection that names a server only: one the login can open. "
+                   + "A connection that names a database stays on it.")]
         string? database = null)
     {
         var connections = LoadConnections();
@@ -153,28 +154,61 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         if (connections.FirstOrDefault(entry => entry.Id == id) is not { } chosen)
             return $"No connection {id}. Call this tool without arguments to see the list.";
 
-        if ((database ?? chosen.Database) is not { Length: > 0 } catalog)
+        // A connection that names a database is bound to it: the user chose that target when declaring
+        // it, and another database of the same server is another connection to declare.
+        if (chosen.Database is { Length: > 0 } declared)
+        {
+            if (database is { Length: > 0 } && !string.Equals(database, declared, StringComparison.OrdinalIgnoreCase))
+                return $"Connection {chosen.Id} works on the database {declared}, and only on it. To work on {database}, "
+                     + "the user declares a connection for it: schema-mcp configure add.";
+
+            _active = new ActiveConnection(chosen, declared);
+            return _active.Stamp("Selected.");
+        }
+
+        if (database is not { Length: > 0 })
             return $"Connection {chosen.Id} names a server only. Choose a database:" + Environment.NewLine
+                 + ListDatabases(chosen);
+
+        // Only a database the login can open: any other name would be selected, then fail on every call
+        // without saying why.
+        if (FindOpenableDatabase(chosen, database) is not { } catalog)
+            return $"No database named {database} can be opened by this login. Choose among:" + Environment.NewLine
                  + ListDatabases(chosen);
 
         _active = new ActiveConnection(chosen, catalog);
         return _active.Stamp("Selected.");
     }
 
-    // Filtered by visibility, so this lists what the login may reach and nothing else.
+    // By default every login may read the names of all databases (VIEW ANY DATABASE is granted to
+    // public), so sys.databases alone says nothing of access: has_dbaccess says whether the login can
+    // enter the database.
     private static string ListDatabases(ConnectionEntry entry)
     {
         using var connection = new SqlConnection(entry.BuildConnectionString("master"));
         connection.Open();
 
-        using var command = new SqlCommand("select name from sys.databases order by name;", connection);
+        using var command = new SqlCommand("select name from sys.databases where has_dbaccess(name) = 1 order by name;", connection);
         using var reader = command.ExecuteReader();
 
         var names = new List<string>();
         while (reader.Read())
             names.Add(reader.GetString(0));
 
-        return names.Count == 0 ? "(no database is visible to this login)" : string.Join(Environment.NewLine, names);
+        return names.Count == 0 ? "(no database can be opened by this login)" : string.Join(Environment.NewLine, names);
+    }
+
+    // The name as the server spells it, or null when the login cannot open such a database.
+    private static string? FindOpenableDatabase(ConnectionEntry entry, string name)
+    {
+        using var connection = new SqlConnection(entry.BuildConnectionString("master"));
+        connection.Open();
+
+        using var command = new SqlCommand(
+            "select name from sys.databases where name = @name and has_dbaccess(name) = 1;", connection);
+        command.Parameters.Add("@name", SqlDbType.NVarChar, 128).Value = name;
+
+        return command.ExecuteScalar() as string;
     }
 
     /// <summary>Describes the installation, so the model can answer how connections are managed.</summary>

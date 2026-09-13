@@ -52,8 +52,9 @@ public sealed partial class DemoDatabase : IDisposable
     };
 
     // No conventions file unless a test gives one: the path below never exists.
-    internal SchemaTools CreateTools(int maxResults = SchemaSettings.DefaultMaxResults, string? conventionsPath = null) =>
-        new(new SchemaSettings(maxResults, UnusedConfigPath, Entry, conventionsPath ?? MissingConventionsPath),
+    internal SchemaTools CreateTools(
+        int maxResults = SchemaSettings.DefaultMaxResults, string? conventionsPath = null, ConnectionEntry? entry = null) =>
+        new(new SchemaSettings(maxResults, UnusedConfigPath, entry ?? Entry, conventionsPath ?? MissingConventionsPath),
             new ConnectionStore(UnusedConfigPath));
 
     private static readonly string MissingConventionsPath =
