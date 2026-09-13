@@ -1464,7 +1464,14 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         // holds the handshake on a round trip to the server.
         private Lazy<string?>? _readAccess;
 
+        private Lazy<string?>? _descriptions;
+
         private int _announced;
+
+        // An agent that cannot verify an assumption on the data is tempted to ask for more than the
+        // rights of this server. The loop that answers it is the one the server already serves.
+        private const string NoDataNote =
+            "This server reads no data: to check an assumption on the data, give the user a query to run.";
 
         public string ConnectionString => Entry.BuildConnectionString(Database);
 
@@ -1474,21 +1481,68 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
                 ? DataAccess.Warning(reason)
                 : null;
 
+        /// <summary>
+        /// How many objects and columns carry an MS_Description: without it, an agent does not know whether
+        /// asking describe_object for them is worth a parameter. Null when the count could not be made.
+        /// </summary>
+        public string? DescriptionsNote =>
+            (_descriptions ??= new(() => CountDescriptions(ConnectionString))).Value;
+
+        // Readable under VIEW DEFINITION alone (measured on LocalDB under the restricted login). Class 1
+        // holds objects and their columns; parameters are another class, which describe_object does not read.
+        private static string? CountDescriptions(string connectionString)
+        {
+            try
+            {
+                using var connection = new SqlConnection(connectionString);
+                connection.Open();
+                using var command = new SqlCommand("""
+                    select count(case when minor_id = 0 then 1 end), count(case when minor_id > 0 then 1 end)
+                    from sys.extended_properties
+                    where class = 1 and name = N'MS_Description';
+                    """, connection);
+                using var reader = command.ExecuteReader();
+                reader.Read();
+
+                var (objects, columns) = (reader.GetInt32(0), reader.GetInt32(1));
+                return objects + columns == 0
+                    ? "Descriptions (MS_Description): none in this database."
+                    : $"Descriptions (MS_Description) on objects: {objects}, on columns: {columns}. "
+                      + "describe_object returns them with descriptions: true.";
+            }
+            catch (SqlException)
+            {
+                // As for the read access check: the tool that needs the connection reports why it fails.
+                return null;
+            }
+        }
+
         public string Describe() =>
             Entry.Database == Database ? Entry.Describe() : $"{Entry.Describe()} on {Database}";
 
         // Every result names its target. It is the one guard against a wrong one that does not rely
         // on the model behaving: a mistake shows in the answer rather than three questions later.
         //
-        // The warning on reading the data comes once, with the first result after the connection is
-        // chosen: it informs a decision rather than a call, and repeating it would cost tokens on each.
+        // What holds for the whole connection comes once, with the first result after it is chosen: the
+        // warning on reading the data, that the server reads none, and whether the database documents
+        // itself. Each informs a decision rather than a call, and repeating it would cost tokens on each.
         //
         // Line endings are normalised here, once, for everything the tools return: a carriage return
         // per line buys a reader nothing and is paid for in tokens on every result.
         public string Stamp(string body)
         {
-            var warning = Interlocked.Exchange(ref _announced, 1) == 0 ? ReadAccessWarning : null;
-            var heading = warning is null ? $"[{Describe()}]" : $"[{Describe()}]\n{warning}";
+            var heading = new StringBuilder($"[{Describe()}]");
+            if (Interlocked.Exchange(ref _announced, 1) == 0)
+            {
+                if (ReadAccessWarning is { } warning)
+                    heading.Append('\n').Append(warning);
+
+                heading.Append('\n').Append(NoDataNote);
+
+                if (DescriptionsNote is { } descriptions)
+                    heading.Append('\n').Append(descriptions);
+            }
+
             return $"{heading}\n{body}".Replace("\r\n", "\n");
         }
     }

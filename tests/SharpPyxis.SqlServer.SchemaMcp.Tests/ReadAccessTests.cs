@@ -30,6 +30,21 @@ public sealed class ReadAccessTests(DemoDatabase database)
         Assert.Contains(Warning, tools.ServerInfo());
     }
 
+    // The demo database documents one table and one of its columns.
+    [Fact]
+    public async Task TheFirstResultSaysTheServerReadsNoDataAndCountsTheDescriptions()
+    {
+        var tools = database.CreateTools();
+
+        var first = await tools.ListObjects(schema: "stock");
+        var second = await tools.ListObjects(schema: "stock");
+
+        Assert.Contains("This server reads no data", first);
+        Assert.Contains("Descriptions (MS_Description) on objects: 1, on columns: 1.", first);
+        Assert.DoesNotContain("This server reads no data", second);
+        Assert.DoesNotContain("MS_Description", second);
+    }
+
     [Fact]
     public async Task TheWarningIsNotARowOfTheListing()
     {
