@@ -504,6 +504,11 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
     {
         // The graph holds the modules. Foreign keys are not modules and are read beside it: a table
         // pointing to this one is as much an impact of a change as a view reading it.
+        //
+        // The graph is read through sys.dm_sql_referencing_entities, which answers under VIEW DEFINITION
+        // alone. The catalog view sys.sql_expression_dependencies also requires SELECT, which public does
+        // not grant: the restricted login is refused there. Its deprecated ancestors, sys.sql_dependencies
+        // and sys.sysdepends, are readable, which makes the switch look safe when it is not.
         var query = $"""
             declare @target nvarchar(600) = quotename(@targetSchema) + N'.' + quotename(@targetName);
 
