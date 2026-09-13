@@ -89,7 +89,8 @@ public sealed class DemoDatabaseCollection : ICollectionFixture<DemoDatabase>
 
 internal static class ToolOutput
 {
-    // The first line names the target; the rows of a listing are the lines holding a tab.
+    // The first line names the target and the header names the columns; the rows of a listing are the
+    // other lines holding a tab.
     public static string[] Rows(string result) =>
-        [.. result.Split('\n').Skip(1).Where(line => line.Contains('\t'))];
+        [.. result.Split('\n').Skip(1).Where(line => line.Contains('\t') && !line.StartsWith("type\t"))];
 }

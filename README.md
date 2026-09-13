@@ -42,8 +42,8 @@ MCP server. You can check for yourself, on your own instance, what its login can
 
 ### The one figure about the data: the number of rows
 
-The `describe_object` tool gives the approximate number of rows of a table. At first sight, this looks
-as if the MCP server had read the table. It has not.
+The `list_objects` and `describe_object` tools give the approximate number of rows of each table. At
+first sight, this looks as if the MCP server had read the tables. It has not.
 
 SQL Server keeps that number in its catalog, in the system view `sys.partitions`, as part of what it
 knows about the storage of a table. The `VIEW DEFINITION` right shows it, just as SSMS shows it in the
@@ -286,7 +286,7 @@ The MCP server offers eight tools, and a ninth when you provide a conventions fi
 
 | Tool | What it returns |
 | --- | --- |
-| `list_objects` | The list of tables, views, procedures, functions and sequences. It can be filtered by schema, name, object type or modification date. For each view, procedure or function, it gives the length of its text: the agent knows what an object will cost to read before asking for it. |
+| `list_objects` | The list of tables, views, procedures, functions and sequences. It can be filtered by schema, name, object type or modification date. For each table, it gives its approximate number of rows, which shows at once the main table among its satellites. For each view, procedure or function, it gives the length of its text: the agent knows what an object will cost to read before asking for it. |
 | `describe_object` | A compact summary of the structure of an object. For a table: its approximate number of rows, its columns and their types, its keys, indexes, foreign keys, checks and triggers. For a view: its columns. For a procedure or a function: its parameters. On request, the descriptions (`MS_Description`) of the object and of its columns. |
 | `script_object` | The complete `CREATE` script of an object, as SSMS produces it. The agent uses it when it has to change the object, and `describe_object` when it only needs to know its structure. |
 | `find_references` | What uses an object: the views, procedures, functions and triggers that rely on it, and the tables whose foreign keys point to it. Or, the other way round, what that object uses. |

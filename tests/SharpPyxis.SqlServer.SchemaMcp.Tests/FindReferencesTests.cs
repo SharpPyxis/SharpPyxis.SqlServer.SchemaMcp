@@ -81,7 +81,19 @@ public sealed class FindReferencesTests(DemoDatabase database)
     {
         var result = await database.CreateTools().FindReferences("sales.order_line", direction: "referenced");
 
-        Assert.Contains("USER_TABLE\tsales.order_header\tforeign key fk_order_line_order_header", result);
+        Assert.Contains("type\tobject\tnote", result);
+        Assert.Contains("table\tsales.order_header\tforeign key fk_order_line_order_header", result);
+    }
+
+    [Fact]
+    public async Task AReferencingTableComesWithItsRowsAndTheNoteColumnIsNamed()
+    {
+        var result = await database.CreateTools().FindReferences("sales.order_header");
+
+        Assert.Contains("type\tobject\tmodified\trows\ttext_chars\tnote", result);
+        var table = ToolOutput.Rows(result).Single(row => row.Contains("\tsales.order_line\t")).Split('\t');
+        Assert.Equal("table", table[0]);
+        Assert.Equal("0", table[3]);
     }
 
     [Fact]

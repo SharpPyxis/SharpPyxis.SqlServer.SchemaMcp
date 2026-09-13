@@ -26,6 +26,29 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
     // The object types the server exposes, as sys.objects spells them.
     private const string ExposedTypes = "'U', 'V', 'P', 'FN', 'IF', 'TF', 'SO'";
 
+    // The word a type is written with in every result: the one objectType accepts, so what a result
+    // shows can be passed back as a filter, and a few tokens where the catalog name costs several.
+    // Functions keep their kind, which decides how SQL calls them. Any other type keeps its catalog
+    // name, lower-cased.
+    private static string TypeWord(string typeDesc) => typeDesc switch
+    {
+        "USER_TABLE" => "table",
+        "VIEW" => "view",
+        "SQL_STORED_PROCEDURE" => "procedure",
+        "SQL_SCALAR_FUNCTION" => "scalar function",
+        "SQL_INLINE_TABLE_VALUED_FUNCTION" => "inline function",
+        "SQL_TABLE_VALUED_FUNCTION" => "table function",
+        "SQL_TRIGGER" => "trigger",
+        "SEQUENCE_OBJECT" => "sequence",
+        _ => typeDesc.ToLowerInvariant().Replace('_', ' '),
+    };
+
+    // The number of rows of a table as the catalog keeps it, readable under VIEW DEFINITION: the rows
+    // themselves are neither read nor counted. Null for anything but a table.
+    private static string TableRows(string alias) =>
+        $"case when {alias}.type = 'U' then (select sum(p.rows) from sys.partitions as p "
+        + $"where p.object_id = {alias}.object_id and p.index_id in (0, 1)) end";
+
     // Shared by every query that counts, spreads or lists, so the three always see the same rows.
     private const string ObjectFilter = """
           and (@schema is null or s.name = @schema)
@@ -222,8 +245,9 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
     /// <summary>Lists the objects of the database, filtered on schema, name, type or last change.</summary>
     [McpServerTool(Name = "list_objects", ReadOnly = true, Idempotent = true)]
     [Description("Lists the tables, views, procedures, functions and sequences of the database, with their "
-               + "schema, last modification date and, for views, procedures and functions, the length of their "
-               + "text in characters: what script_object would cost to read. "
+               + "schema and last modification date. For a table, its number of rows as the catalog keeps it: "
+               + "approximate, and the rows themselves are not read. For a view, procedure or function, the "
+               + "length of its text in characters: what script_object would cost to read. "
                + "A large database holds tens of thousands of objects, so "
                + "filter whenever the request names a schema, a type or part of a name. When nothing in the "
                + "request tells you what to filter on, ask the user rather than guess. An unfiltered call that "
@@ -282,11 +306,13 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         DateTime? modifiedSince, bool mostRecentFirst, int total, CancellationToken cancellationToken)
     {
         // The NULL first sort key leaves the order to schema and name unless mostRecentFirst is set.
-        // The length is read after the top, on the rows returned only: over a whole database it costs
-        // seconds. It is null for tables and sequences, which have no text, and for encrypted modules.
+        // The rows and the length are read after the top, on the rows returned only: over a whole
+        // database the length costs seconds. The length is null for tables and sequences, which have no
+        // text, and for encrypted modules; the rows are given for tables only.
         var query = $"""
-            select t.schema_name, t.object_name, t.type_desc, t.modify_date, datalength(m.definition) / 2
-            from (select top (@limit) o.object_id, s.name as schema_name, o.name as object_name,
+            select t.schema_name, t.object_name, t.type_desc, t.modify_date, {TableRows("t")},
+                   datalength(m.definition) / 2
+            from (select top (@limit) o.object_id, o.type, s.name as schema_name, o.name as object_name,
                                       o.type_desc, o.modify_date
                   from sys.objects as o
                   join sys.schemas as s on s.schema_id = o.schema_id
@@ -308,7 +334,7 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
 
-        var inventory = new StringBuilder();
+        var inventory = new StringBuilder().AppendLine(ObjectHeader(withNote: false));
         var returned = 0;
         while (await reader.ReadAsync(cancellationToken))
         {
@@ -353,7 +379,7 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
 
         while (await reader.ReadAsync(cancellationToken))
         {
-            var (schemaName, typeName, count) = (reader.GetString(0), reader.GetString(1), reader.GetInt32(2));
+            var (schemaName, typeName, count) = (reader.GetString(0), TypeWord(reader.GetString(1)), reader.GetInt32(2));
 
             bySchema[schemaName] = bySchema.GetValueOrDefault(schemaName) + count;
             byType[typeName] = byType.GetValueOrDefault(typeName) + count;
@@ -509,30 +535,51 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         // alone. The catalog view sys.sql_expression_dependencies also requires SELECT, which public does
         // not grant: the restricted login is refused there. Its deprecated ancestors, sys.sql_dependencies
         // and sys.sysdepends, are readable, which makes the switch look safe when it is not.
+        //
+        // Every reference is read, to count and spread them; the rows of a table only for the references
+        // that will be shown, as list_objects reads them after its top — none when the spread is returned
+        // instead, which the total decides as the code below does. On a table referenced thousands of
+        // times, reading them for all was measured at 0.4 s more per call.
         var query = $"""
             declare @target nvarchar(600) = quotename(@targetSchema) + N'.' + quotename(@targetName);
 
-            select s.name, o.name, o.type_desc, o.modify_date, datalength(m.definition) / 2,
-                   cast(null as nvarchar(200))
-            from sys.dm_sql_referencing_entities(@target, N'OBJECT') as r
-            join sys.objects as o on o.object_id = r.referencing_id
-            join sys.schemas as s on s.schema_id = o.schema_id
-            left join sys.sql_modules as m on m.object_id = o.object_id
-            where o.is_ms_shipped = 0
-            {ObjectFilter}
-            union all
-            select s.name, o.name, o.type_desc, o.modify_date, cast(null as bigint), N'foreign key ' + fk.name
-            from sys.foreign_keys as fk
-            join sys.objects as o on o.object_id = fk.parent_object_id
-            join sys.schemas as s on s.schema_id = o.schema_id
-            where fk.referenced_object_id = object_id(@target)
-            {ObjectFilter}
-            order by 1, 2, 6;
+            with refs as (
+                select s.name as schema_name, o.name as object_name, o.object_id, o.type, o.type_desc,
+                       o.modify_date, datalength(m.definition) / 2 as chars, cast(null as nvarchar(200)) as note
+                from sys.dm_sql_referencing_entities(@target, N'OBJECT') as r
+                join sys.objects as o on o.object_id = r.referencing_id
+                join sys.schemas as s on s.schema_id = o.schema_id
+                left join sys.sql_modules as m on m.object_id = o.object_id
+                where o.is_ms_shipped = 0
+                {ObjectFilter}
+                union all
+                select s.name, o.name, o.object_id, o.type, o.type_desc, o.modify_date, cast(null as bigint),
+                       N'foreign key ' + fk.name
+                from sys.foreign_keys as fk
+                join sys.objects as o on o.object_id = fk.parent_object_id
+                join sys.schemas as s on s.schema_id = o.schema_id
+                where fk.referenced_object_id = object_id(@target)
+                {ObjectFilter}
+            ),
+            ranked as (
+                select refs.*, row_number() over (order by schema_name, object_name, note) as position,
+                       count(*) over () as total
+                from refs
+            )
+            select t.schema_name, t.object_name, t.type_desc, t.modify_date,
+                   case when t.position <= @shown and (@limited = 1 or t.total <= @shown)
+                        then {TableRows("t")} end,
+                   t.chars, t.note
+            from ranked as t
+            order by t.position;
             """;
 
         await using var command = new SqlCommand(query, connection);
         AddTargetParameters(command, targetSchema, targetName);
         AddFilterParameters(command, schema, null, objectType, null);
+        command.Parameters.Add("@shown", SqlDbType.Int).Value =
+            countOnly ? 0 : Math.Min(limit ?? settings.MaxResults, settings.MaxResults);
+        command.Parameters.Add("@limited", SqlDbType.Bit).Value = limit is not null;
 
         var rows = new List<ObjectRow>();
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
@@ -551,7 +598,7 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
             return DescribeReferenceSpread(rows, target);
 
         var taken = rows.Take(Math.Min(limit ?? settings.MaxResults, settings.MaxResults)).ToList();
-        var report = new StringBuilder();
+        var report = new StringBuilder().AppendLine(ObjectHeader(taken.Any(row => row.Note is not null)));
         foreach (var row in taken)
             AppendObjectRow(report, row);
 
@@ -624,17 +671,29 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         AddTargetParameters(command, targetSchema, targetName);
 
         var lines = new List<string>();
+        var noted = false;
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
-                lines.Add($"{reader.GetString(0)}\t{reader.GetString(1)}\t{reader.GetString(2)}");
+            {
+                lines.Add($"{TypeWord(reader.GetString(0))}\t{reader.GetString(1)}\t{reader.GetString(2)}");
+                noted = true;
+            }
 
             await reader.NextResultAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
-                var type = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+                var type = reader.IsDBNull(0) ? string.Empty : TypeWord(reader.GetString(0));
                 var name = string.Join('.', Enumerable.Range(1, 4).Where(i => !reader.IsDBNull(i)).Select(reader.GetString));
-                lines.Add(reader.IsDBNull(5) ? $"{type}\t{name}" : $"{type}\t{name}\t{reader.GetString(5)}");
+                if (reader.IsDBNull(5))
+                {
+                    lines.Add($"{type}\t{name}");
+                }
+                else
+                {
+                    lines.Add($"{type}\t{name}\t{reader.GetString(5)}");
+                    noted = true;
+                }
             }
         }
 
@@ -648,6 +707,9 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         var report = new StringBuilder();
         if (lines.Count == 0 && !incomplete)
             report.Append($"{target} references no other object. ");
+
+        if (lines.Count > 0)
+            report.AppendLine(noted ? "type\tobject\tnote" : "type\tobject");
 
         foreach (var line in lines.Take(settings.MaxResults))
             report.AppendLine(line);
@@ -668,17 +730,24 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         command.Parameters.Add("@targetName", SqlDbType.NVarChar, 128).Value = name;
     }
 
-    // Columns: schema, name, type, modification date, length of the text, and an optional note.
+    // Columns: schema, name, type, modification date, rows of a table, length of the text, and an
+    // optional note.
     private static ObjectRow ReadObjectRow(SqlDataReader reader) => new(
-        reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetDateTime(3),
+        reader.GetString(0), reader.GetString(1), TypeWord(reader.GetString(2)), reader.GetDateTime(3),
         reader.IsDBNull(4) ? null : reader.GetInt64(4),
-        reader.FieldCount > 5 && !reader.IsDBNull(5) ? reader.GetString(5) : null);
+        reader.IsDBNull(5) ? null : reader.GetInt64(5),
+        reader.FieldCount > 6 && !reader.IsDBNull(6) ? reader.GetString(6) : null);
 
-    // The one row format of the tools that list objects, so a reader learns it once.
+    // A number without its unit reads as anything: the header names each column of AppendObjectRow.
+    private static string ObjectHeader(bool withNote) =>
+        withNote ? "type\tobject\tmodified\trows\ttext_chars\tnote" : "type\tobject\tmodified\trows\ttext_chars";
+
+    // The one row format of the tools that list objects, so a reader learns it once. An empty cell
+    // means the column does not apply to that object.
     private static void AppendObjectRow(StringBuilder report, ObjectRow row)
     {
         report.Append(CultureInfo.InvariantCulture,
-            $"{row.Type}\t{row.Schema}.{row.Name}\t{row.Modified:yyyy-MM-dd HH:mm:ss}\t{row.Chars}");
+            $"{row.Type}\t{row.Schema}.{row.Name}\t{row.Modified:yyyy-MM-dd HH:mm:ss}\t{row.Rows}\t{row.Chars}");
 
         if (row.Note is not null)
             report.Append('\t').Append(row.Note);
@@ -752,7 +821,7 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
-                modules.Add(new ModuleText(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3)));
+                modules.Add(new ModuleText(reader.GetString(0), reader.GetString(1), TypeWord(reader.GetString(2)), reader.GetString(3)));
         }
 
         if (modules.Count == 0)
@@ -933,7 +1002,7 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         rowsCommand.Parameters.Add("@limit", SqlDbType.Int).Value = Math.Min(limit ?? settings.MaxResults, settings.MaxResults);
         AddColumnParameters(rowsCommand, columnPattern, schema, objectType);
 
-        var report = new StringBuilder();
+        var report = new StringBuilder().AppendLine("type\tobject\tcolumn\tdata_type\tnullability");
         var returned = 0;
         await using (var reader = await rowsCommand.ExecuteReaderAsync(cancellationToken))
         {
@@ -941,7 +1010,7 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
             {
                 var type = FormatType(reader.GetString(4), reader.GetInt16(5), reader.GetByte(6), reader.GetByte(7));
                 var nullability = reader.GetBoolean(8) ? "null" : "not null";
-                report.AppendLine($"{reader.GetString(2)}\t{reader.GetString(0)}.{reader.GetString(1)}\t{reader.GetString(3)}\t{type}\t{nullability}");
+                report.AppendLine($"{TypeWord(reader.GetString(2))}\t{reader.GetString(0)}.{reader.GetString(1)}\t{reader.GetString(3)}\t{type}\t{nullability}");
                 returned++;
             }
         }
@@ -1102,7 +1171,7 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         // The object. Its row count is the one SQL Server keeps in its catalog, as SSMS shows it in the
         // properties of a table: the rows themselves are neither read nor counted.
         reader.Read();
-        report.Append($"{reader.GetString(0)}\t{schema}.{name}");
+        report.Append($"{TypeWord(reader.GetString(0))}\t{schema}.{name}");
         if (!reader.IsDBNull(1))
             report.Append(CultureInfo.InvariantCulture,
                 $"\tabout {reader.GetInt64(1)} rows (from the catalog: the rows themselves were not read)");
@@ -1377,7 +1446,7 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
 
     private sealed record Spread(int Total, Dictionary<string, int> BySchema, Dictionary<string, int> ByType);
 
-    private sealed record ObjectRow(string Schema, string Name, string Type, DateTime Modified, long? Chars, string? Note);
+    private sealed record ObjectRow(string Schema, string Name, string Type, DateTime Modified, long? Rows, long? Chars, string? Note);
 
     private sealed record ModuleText(string Schema, string Name, string Type, string Definition);
 

@@ -10,7 +10,7 @@ public sealed class DescribeObjectTests(DemoDatabase database)
     {
         var result = database.CreateTools().DescribeObject("sales.order_line");
 
-        Assert.Contains("USER_TABLE\tsales.order_line\tabout 0 rows (from the catalog: the rows themselves were not read)", result);
+        Assert.Contains("table\tsales.order_line\tabout 0 rows (from the catalog: the rows themselves were not read)", result);
         Assert.Contains("\norder_id\tint\tnot null\n", result);
         Assert.Contains("\nunit_price\tdecimal(18, 4)\tnot null\n", result);
         Assert.Contains("Primary key: pk_order_line (order_id, line_number) clustered", result);
@@ -49,7 +49,7 @@ public sealed class DescribeObjectTests(DemoDatabase database)
     {
         var result = database.CreateTools().DescribeObject("sales.order_summary");
 
-        Assert.Contains("VIEW\tsales.order_summary\n", result);
+        Assert.Contains("view\tsales.order_summary\n", result);
         Assert.Contains("\nline_count\tint\tnull\n", result);
     }
 

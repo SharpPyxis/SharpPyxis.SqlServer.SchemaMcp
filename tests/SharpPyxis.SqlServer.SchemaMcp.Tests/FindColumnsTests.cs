@@ -11,7 +11,7 @@ public sealed class FindColumnsTests(DemoDatabase database)
         var rows = ToolOutput.Rows(await database.CreateTools().FindColumns("siret"));
 
         Assert.Equal(
-            ["USER_TABLE\tlegacy.customer\tsiret\tchar(14)\tnull", "USER_TABLE\tsales.customer\tsiret\tchar(14)\tnull"],
+            ["table\tlegacy.customer\tsiret\tchar(14)\tnull", "table\tsales.customer\tsiret\tchar(14)\tnull"],
             rows);
     }
 
@@ -21,15 +21,16 @@ public sealed class FindColumnsTests(DemoDatabase database)
         var rows = ToolOutput.Rows(await database.CreateTools().FindColumns("name", columnMatch: "equals"));
 
         Assert.All(rows, row => Assert.Equal("name", row.Split('\t')[2]));
-        Assert.Contains(rows, row => row.StartsWith("USER_TABLE\tsales.customer\tname\tnvarchar(200)\tnot null"));
+        Assert.Contains(rows, row => row.StartsWith("table\tsales.customer\tname\tnvarchar(200)\tnot null"));
     }
 
     [Fact]
     public async Task ViewsCarryTheirColumns()
     {
-        var rows = ToolOutput.Rows(await database.CreateTools().FindColumns("line_count"));
+        var result = await database.CreateTools().FindColumns("line_count");
 
-        Assert.Equal("VIEW\tsales.order_summary\tline_count\tint\tnull", Assert.Single(rows));
+        Assert.Contains("type\tobject\tcolumn\tdata_type\tnullability", result);
+        Assert.Equal("view\tsales.order_summary\tline_count\tint\tnull", Assert.Single(ToolOutput.Rows(result)));
     }
 
     [Fact]

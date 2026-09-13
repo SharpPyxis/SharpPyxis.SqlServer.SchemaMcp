@@ -53,6 +53,22 @@ public sealed class ListObjectsTests(DemoDatabase database)
         Assert.Equal(string.Empty, table[^1]);
     }
 
+    // The catalog keeps a row count for a table only; the demo database holds no data, so it is 0.
+    [Fact]
+    public async Task ColumnsAreNamedAndRowsAreGivenForTablesOnly()
+    {
+        var result = await database.CreateTools().ListObjects(schema: "sales");
+        var rows = ToolOutput.Rows(result);
+
+        Assert.Contains("type\tobject\tmodified\trows\ttext_chars", result);
+
+        var procedure = rows.Single(row => row.Contains("\tsales.order_place\t")).Split('\t');
+        var table = rows.Single(row => row.Contains("\tsales.customer\t")).Split('\t');
+
+        Assert.Equal(("procedure", string.Empty), (procedure[0], procedure[3]));
+        Assert.Equal(("table", "0"), (table[0], table[3]));
+    }
+
     [Fact]
     public async Task LimitReturnsItsRowsAndAnnouncesTheTotal()
     {
