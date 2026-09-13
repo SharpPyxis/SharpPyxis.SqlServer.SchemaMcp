@@ -1,7 +1,7 @@
 # SharpPyxis.SqlServer.SchemaMcp
 
-Read-only MCP server that lets an AI agent read the structure of a SQL Server database — objects, code,
-dependencies, columns — and never its data.
+Local, read-only MCP server that lets an AI agent read the structure of a SQL Server database — objects,
+code, dependencies, columns — and never its data.
 
 ## The idea
 
