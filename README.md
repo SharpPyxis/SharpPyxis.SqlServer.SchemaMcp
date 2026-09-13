@@ -424,19 +424,43 @@ kind of query.
 
 ## Installation
 
-The MCP server runs on Windows x64, with .NET 10.
+The MCP server is a single executable, `schema-mcp.exe`, of about 93 MB, for Windows x64. It contains
+the .NET runtime: nothing else needs to be installed on the machine.
 
-<!-- Distribution to be decided: a self-contained executable in the releases, or a NuGet package run by dnx. -->
+### From a release
 
-It is built with the following command:
+Each release of this repository publishes the executable, a file holding its SHA-256 fingerprint,
+and the notices of the third-party components it contains. The following block, run in PowerShell,
+downloads the executable of the latest release into `C:\Tools\SchemaMcp`, then checks its fingerprint.
+Change the folder if you prefer another one.
+
+```powershell
+$folder = 'C:\Tools\SchemaMcp'
+$release = 'https://github.com/SharpPyxis/SharpPyxis.SqlServer.SchemaMcp/releases/latest/download'
+New-Item -ItemType Directory -Force $folder | Out-Null
+Invoke-WebRequest "$release/schema-mcp.exe" -OutFile "$folder\schema-mcp.exe"
+Invoke-WebRequest "$release/schema-mcp.exe.sha256" -OutFile "$folder\schema-mcp.exe.sha256"
+$expected = (Get-Content "$folder\schema-mcp.exe.sha256").Split(' ')[0]
+$actual = (Get-FileHash "$folder\schema-mcp.exe" -Algorithm SHA256).Hash
+if ($actual -ne $expected) { Remove-Item "$folder\schema-mcp.exe"; throw 'Fingerprint mismatch: the executable was removed.' }
+"Fingerprint verified: $actual"
+```
+
+The executable and its fingerprint come from the same release. So the check proves that the download
+is complete and intact. It does not prove who built the file.
+
+The executable is not signed yet. On a machine where Smart App Control is on, Windows may block it.
+
+### From the source
+
+The executable is built with the following command:
 
 ```powershell
 dotnet publish src/SharpPyxis.SqlServer.SchemaMcp -c Release -r win-x64 --self-contained `
     -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o C:\Tools\SchemaMcp
 ```
 
-The result is a single executable, `schema-mcp.exe`, of about 93 MB. It contains the .NET runtime:
-nothing else needs to be installed on the machine.
+The result is the same single executable as the one published in the releases.
 
 ### The connections
 
