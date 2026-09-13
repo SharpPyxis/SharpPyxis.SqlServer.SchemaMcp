@@ -1,5 +1,7 @@
 # SharpPyxis.SqlServer.SchemaMcp
 
+English · [Français](README.fr.md)
+
 Local, read-only MCP server that lets an AI agent read the structure of a SQL Server database — objects,
 code, dependencies, columns — and never its data.
 
@@ -510,7 +512,7 @@ If you have declared several connections, none is chosen at startup. The agent t
 database to work on, and it only switches to another one when you ask it to. Every result names the
 database it comes from: a wrong target shows at once.
 
-Three environment variables set up the MCP server:
+Four environment variables set up the MCP server:
 
 | Variable | Role |
 | --- | --- |
