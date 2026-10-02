@@ -34,6 +34,8 @@ var builder = Host.CreateApplicationBuilder(args);
 // stdout belongs to the MCP protocol: every log goes to stderr.
 builder.Logging.AddConsole(options => options.LogToStandardErrorThreshold = LogLevel.Trace);
 
+var tools = new SchemaTools(settings, store).CreateTools().ToList();
+
 builder.Services
     .AddMcpServer(options => options.ServerInstructions =
         "Read-only access to the DDL of SQL Server databases. It returns object definitions only, "
@@ -41,7 +43,8 @@ builder.Services
         + "Call use_connection to see the configured targets and to choose one; every result names the "
         + "target it came from.")
     .WithStdioServerTransport()
-    .WithTools(new SchemaTools(settings, store).CreateTools());
+    .WithTools(tools)
+    .WithRequestFilters(filters => filters.AddCallToolFilter(ArgumentCheck.Filter(tools)));
 
 await builder.Build().RunAsync();
 return 0;
