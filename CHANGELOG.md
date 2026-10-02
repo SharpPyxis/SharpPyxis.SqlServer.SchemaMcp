@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-10-02
+
+### Fixed
+
+- A call the server could not take returned "An error occurred invoking" the tool, which names
+  nothing, and the model repeated the same call. The error now says what was wrong, gives back the
+  arguments received, and lists the parameters of the tool.
+- An argument with a name the tool does not have was ignored: a misspelled filter returned the
+  unfiltered result as if it had applied. Such a call is now refused before anything runs.
+
 ## [0.1.1] - 2026-09-13
 
 ### Fixed
@@ -37,5 +47,6 @@ database, and never its data.
 - A demo database, `db/Create-DemoDatabase.sql`, to try the server away from any real database.
 - An example of a conventions file, in `examples/`.
 
+[0.1.2]: https://github.com/SharpPyxis/SharpPyxis.SqlServer.SchemaMcp/releases/tag/v0.1.2
 [0.1.1]: https://github.com/SharpPyxis/SharpPyxis.SqlServer.SchemaMcp/releases/tag/v0.1.1
 [0.1.0]: https://github.com/SharpPyxis/SharpPyxis.SqlServer.SchemaMcp/releases/tag/v0.1.0
