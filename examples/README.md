@@ -3,15 +3,16 @@
 ## conventions.md
 
 `conventions.md` is an **example** of a conventions file: the SQL writing conventions of one team,
-published to show what such a file can look like. It was written on 2026-09-12 and is not kept up to
-date.
+published to show what such a file can look like. It is updated only now and then: written on
+2026-09-12, it gained its section on aggregates on 2026-11-06.
 
 The MCP server imposes no convention, and it ships none. Without a conventions file, its
 `read_conventions` tool does not exist. Copy this file, change it, or write your own from scratch.
 
 A conventions file tells the AI agent how your team writes SQL. The code the agent reads in the
 database shows one style, sometimes several; the conventions file says which rules to follow when it
-writes something new.
+writes something new. It can also name the mistakes the agent keeps making: the section on aggregates
+is one, two forms SQL Server refuses and an agent writes again and again.
 
 There are two ways to give it to the agent. Choose one of them: a file loaded twice costs twice, and
 two copies drift apart as soon as one of them is edited.

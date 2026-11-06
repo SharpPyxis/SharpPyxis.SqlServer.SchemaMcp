@@ -22,6 +22,29 @@ These conventions apply to SQL Server.
 
 - A `bit` column is compared explicitly: `where is_active = 1`.
 
+## Aggregates
+
+An aggregate only sums what each row already holds. SQL Server refuses two forms, both written
+by mistake in a `sum(case …)` that looks beyond its row:
+
+- **Msg 130**: an `exists` or a subquery inside an aggregate —
+  `sum(case when exists (select …) then 1 else 0 end)`.
+- **Msg 8124**: inside an `apply` or a correlated subquery, an aggregate mixing an outer column
+  with a local one — `sum(l.amount + h.residual)`.
+
+Always the same remedy: compute the per-row value first — in a `cross apply`, a CTE or an
+intermediate table — then aggregate that single column.
+
+```sql
+select  sum(f.has_credit_note)
+from    sales.invoices as i
+cross apply (
+                select case when exists (select 1 from sales.credit_notes as c
+                                         where c.invoice_id = i.invoice_id) then 1 else 0 end
+                       as has_credit_note
+            ) as f;
+```
+
 ## Naming
 
 Tables are named in the **plural**: `sales.invoices`, `sales.invoice_lines`.
