@@ -11,6 +11,11 @@ All notable changes to this project are documented in this file. The format foll
 - A column whose collation is not the database's now shows it: after its type in `describe_object`
   and `find_columns`, and as a `COLLATE` clause in the table that `script_object` returns. A
   column that shares the database's collation shows none, as before.
+- CLR procedures, functions, triggers and aggregates are seen by every tool. `list_objects` shows
+  them as `clr procedure`, `clr scalar function`, `clr table function`, `clr trigger` and
+  `aggregate`; the filter words `procedure`, `function` and `trigger` include them, and `aggregate`
+  is new. `describe_object` gives the method of the assembly that implements one, and the permission
+  set of that assembly; `script_object` returns its signature.
 
 ### Changed
 

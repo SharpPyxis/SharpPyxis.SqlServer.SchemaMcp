@@ -15,10 +15,20 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/SharpPyxis.SqlServer.SchemaMcp/SharpPyxis.SqlServer.SchemaMcp.csproj" />
+    <!-- Built for its file only: a net48 assembly cannot be referenced from here, and is loaded into
+         SQL Server by the fixture. -->
+    <ProjectReference Include="../SharpPyxis.SqlServer.SchemaMcp.ClrSample/SharpPyxis.SqlServer.SchemaMcp.ClrSample.csproj"
+                      ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
   </ItemGroup>
 
   <ItemGroup>
     <None Include="../../db/Create-DemoDatabase.sql" Link="Create-DemoDatabase.sql" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Create-ClrObjects.sql" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <Target Name="CopyClrSample" AfterTargets="Build">
+    <Copy SourceFiles="../SharpPyxis.SqlServer.SchemaMcp.ClrSample/bin/$(Configuration)/net48/SharpPyxis.SqlServer.SchemaMcp.ClrSample.dll"
+          DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>

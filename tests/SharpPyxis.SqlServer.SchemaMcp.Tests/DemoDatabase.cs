@@ -1,3 +1,4 @@
+using System.Data;
 using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 using Xunit;
@@ -30,10 +31,28 @@ public sealed partial class DemoDatabase : IDisposable
             create database [{Name}];
             """);
 
-        var script = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Create-DemoDatabase.sql"));
-
         using var connection = new SqlConnection(Entry.BuildConnectionString());
         connection.Open();
+
+        RunScript(connection, "Create-DemoDatabase.sql");
+
+        // The CLR objects need their assembly. TRUSTWORTHY lets it in under clr strict security without
+        // changing anything on the instance, and stays on this database, dropped after the run. CLR need
+        // not be enabled: the objects are created and read, never run.
+        ExecuteOnMaster($"alter database [{Name}] set trustworthy on;");
+        using (var command = new SqlCommand("create assembly clr_sample from @bits with permission_set = safe;", connection))
+        {
+            command.Parameters.Add("@bits", SqlDbType.VarBinary, -1).Value =
+                File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "SharpPyxis.SqlServer.SchemaMcp.ClrSample.dll"));
+            command.ExecuteNonQuery();
+        }
+
+        RunScript(connection, "Create-ClrObjects.sql");
+    }
+
+    private static void RunScript(SqlConnection connection, string fileName)
+    {
+        var script = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, fileName));
 
         foreach (var batch in BatchSeparator().Split(script).Where(batch => !string.IsNullOrWhiteSpace(batch)))
         {

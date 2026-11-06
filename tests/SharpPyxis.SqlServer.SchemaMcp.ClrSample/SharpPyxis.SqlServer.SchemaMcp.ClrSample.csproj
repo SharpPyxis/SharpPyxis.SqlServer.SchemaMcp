@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The assembly behind the CLR objects the tests read. SQL Server loads only .NET Framework
+       assemblies, hence net48. Nothing in it is ever run: the tests read its objects from the catalog. -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- The implicit usings of .NET Framework name System.Net.Http, which is not referenced here. -->
+    <ImplicitUsings>disable</ImplicitUsings>
+  </PropertyGroup>
+
+</Project>

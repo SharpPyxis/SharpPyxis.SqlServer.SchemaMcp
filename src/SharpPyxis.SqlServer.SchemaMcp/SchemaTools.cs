@@ -23,13 +23,15 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
     // this needs.
     private ActiveConnection? _active = OpenByDefault(settings, store);
 
-    // The object types the server exposes, as sys.objects spells them.
-    private const string ExposedTypes = "'U', 'V', 'P', 'FN', 'IF', 'TF', 'TR', 'SO'";
+    // The object types the server exposes, as sys.objects spells them. The CLR ones follow their T-SQL
+    // counterparts, then the aggregate, which exists in CLR only.
+    private const string ExposedTypes = "'U', 'V', 'P', 'FN', 'IF', 'TF', 'TR', 'SO', 'PC', 'FS', 'FT', 'TA', 'AF'";
 
     // The word a type is written with in every result: the one objectType accepts, so what a result
     // shows can be passed back as a filter, and a few tokens where the catalog name costs several.
-    // Functions keep their kind, which decides how SQL calls them. Any other type keeps its catalog
-    // name, lower-cased.
+    // Functions keep their kind, which decides how SQL calls them, and a CLR module says so, its code
+    // being in an assembly: the filter word is the last one. Any other type keeps its catalog name,
+    // lower-cased.
     private static string TypeWord(string typeDesc) => typeDesc switch
     {
         "USER_TABLE" => "table",
@@ -40,6 +42,11 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         "SQL_TABLE_VALUED_FUNCTION" => "table function",
         "SQL_TRIGGER" => "trigger",
         "SEQUENCE_OBJECT" => "sequence",
+        "CLR_STORED_PROCEDURE" => "clr procedure",
+        "CLR_SCALAR_FUNCTION" => "clr scalar function",
+        "CLR_TABLE_VALUED_FUNCTION" => "clr table function",
+        "CLR_TRIGGER" => "clr trigger",
+        "AGGREGATE_FUNCTION" => "aggregate",
         _ => typeDesc.ToLowerInvariant().Replace('_', ' '),
     };
 
@@ -57,10 +64,11 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
           and (@objectType is null
                or (@objectType = 'table'     and o.type = 'U')
                or (@objectType = 'view'      and o.type = 'V')
-               or (@objectType = 'procedure' and o.type = 'P')
-               or (@objectType = 'function'  and o.type in ('FN', 'IF', 'TF'))
-               or (@objectType = 'trigger'   and o.type = 'TR')
-               or (@objectType = 'sequence'  and o.type = 'SO'))
+               or (@objectType = 'procedure' and o.type in ('P', 'PC'))
+               or (@objectType = 'function'  and o.type in ('FN', 'IF', 'TF', 'FS', 'FT'))
+               or (@objectType = 'trigger'   and o.type in ('TR', 'TA'))
+               or (@objectType = 'sequence'  and o.type = 'SO')
+               or (@objectType = 'aggregate' and o.type = 'AF'))
         """;
 
     // How many rows of a spread are worth reading: beyond that, the tail is counted in one line.
@@ -280,10 +288,12 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
 
     /// <summary>Lists the objects of the database, filtered on schema, name, type or last change.</summary>
     [McpServerTool(Name = "list_objects", ReadOnly = true, Idempotent = true)]
-    [Description("Lists the tables, views, procedures, functions, triggers and sequences of a SQL Server database, with "
+    [Description("Lists the tables, views, procedures, functions, triggers, aggregates and sequences of a SQL Server "
+               + "database, CLR ones included, with "
                + "their schema and last modification date; for a table, its approximate number of rows as the "
                + "catalog keeps it, the rows themselves not being read; for a view, procedure, function or trigger, the "
-               + "length of its text in characters, what script_object would cost to read. Use it to find a "
+               + "length of its text in characters, what script_object would cost to read, none for a CLR object, "
+               + "whose code is in its assembly. Use it to find a "
                + "table by its name, take stock of a schema, or list the objects changed recently. When the "
                + "name is known, pass nameMatch 'equals': 'contains' also returns every longer name holding it. "
                + "Filter whenever the request names a schema, a type or part of a name; when nothing tells you "
@@ -297,7 +307,8 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         [Description("How to match the name: 'contains' (default) or 'equals'. Both follow the collation of "
                    + "the database, which is usually case-insensitive: 'equals' is not a strict comparison.")]
         string nameMatch = "contains",
-        [Description("Only objects of this kind: 'table', 'view', 'procedure', 'function', 'trigger' or 'sequence'. Optional.")]
+        [Description("Only objects of this kind: 'table', 'view', 'procedure', 'function', 'trigger', 'aggregate' or "
+                   + "'sequence', CLR ones included. Optional.")]
         string? objectType = null,
         [Description("Only objects modified since this date (ISO 8601). Optional.")]
         DateTime? modifiedSince = null,
@@ -1133,11 +1144,18 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
 
         select o.type_desc,
                (select sum(p.rows) from sys.partitions as p where p.object_id = o.object_id and p.index_id in (0, 1)),
-               cast(ep.value as nvarchar(4000))
+               cast(ep.value as nvarchar(4000)),
+               -- The class and the method are kept in a binary collation, the assembly in the database's:
+               -- joined as they are, the two collide (Msg 451).
+               quotename(a.name) + N'.' + quotename(am.assembly_class collate database_default)
+               + isnull(N'.' + quotename(am.assembly_method collate database_default), N''),
+               case a.permission_set when 1 then N'SAFE' when 2 then N'EXTERNAL_ACCESS' when 3 then N'UNSAFE' end
         from sys.objects as o
         left join sys.extended_properties as ep
                on @descriptions = 1 and ep.class = 1 and ep.major_id = o.object_id and ep.minor_id = 0
               and ep.name = N'MS_Description'
+        left join sys.assembly_modules as am on am.object_id = o.object_id
+        left join sys.assemblies as a on a.assembly_id = am.assembly_id
         where o.object_id = @id;
 
         select c.name, type_name(c.user_type_id), c.max_length, c.precision, c.scale, c.is_nullable,
@@ -1202,12 +1220,13 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
 
     /// <summary>Describes the structure of one object, in a compact form.</summary>
     [McpServerTool(Name = "describe_object", ReadOnly = true, Idempotent = true)]
-    [Description("Describes the structure of one table, view, procedure, function or trigger of a SQL Server database, "
-               + "in a compact form. For a table: its approximate number "
+    [Description("Describes the structure of one table, view, procedure, function, trigger or aggregate of a SQL Server "
+               + "database, in a compact form. For a table: its approximate number "
                + "of rows, its columns with their types, a collation that is not the database's, nullability, "
                + "identity, defaults and computed expressions, "
                + "its keys, indexes, outgoing foreign keys, checks and triggers. For a view: its columns. For a "
-               + "procedure or a function: its parameters. For a trigger: the table it fires on, and when. Use it "
+               + "procedure, a function or an aggregate: its parameters. For a trigger: the table it fires on, and "
+               + "when. For a CLR object: the method of its assembly that implements it. Use it "
                + "to write a query against the object; for the "
                + "exact DDL, to change the object, use script_object.")]
     public string DescribeObject(
@@ -1245,6 +1264,9 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         report.AppendLine();
         if (!reader.IsDBNull(2))
             report.AppendLine($"Description: {reader.GetString(2)}");
+        // A CLR object has no text: what it runs is a method of an assembly, which this server cannot read.
+        if (!reader.IsDBNull(3))
+            report.AppendLine($"External name: {reader.GetString(3)}, in an assembly of permission set {reader.GetString(4)}");
 
         // The columns of a table, a view or a function returning a table.
         reader.NextResult();
@@ -1380,7 +1402,9 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
     [McpServerTool(Name = "script_object", ReadOnly = true, Idempotent = true)]
     [Description("Returns the complete CREATE script of one object of a SQL Server database, as SSMS generates "
                + "it: tables with constraints, indexes and triggers, a column carrying COLLATE only when its collation "
-               + "is not the database's; views, procedures, functions and triggers with their original text. Use it to change or rewrite an object, or to see how existing code is written. "
+               + "is not the database's; views, procedures, functions and triggers with their original text; a CLR "
+               + "object, aggregates included, as its signature and the method of its assembly it calls. Use it to "
+               + "change or rewrite an object, or to see how existing code is written. "
                + "A procedure can run to hundreds of thousands of characters: when the object may be large, "
                + "read its length in list_objects first.")]
     public string ScriptObject(
@@ -1412,8 +1436,10 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
             if (scriptable is null)
                 return active.Stamp($"Object {schema}.{name} cannot be scripted.");
 
+            // SMO writes a table, and the table a CLR function returns; the text of a T-SQL module is its
+            // author's, and stays as it is.
             var statements = scriptable.Script(CreateScriptingOptions()).Cast<string>();
-            if (scriptable is Table)
+            if (scriptable is Table or UserDefinedFunction { ImplementationType: ImplementationType.SqlClr })
                 statements = statements.Select(statement => KeepOwnCollations(statement, database.Collation));
 
             var script = string.Join($"{Environment.NewLine}GO{Environment.NewLine}", statements)
@@ -1438,9 +1464,11 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
 
     // SMO writes a COLLATE on every text column or none (measured, SMO 181): the one a column shares
     // with the database is noise, the one it does not is what a join trips on. Only the column lines of
-    // the CREATE TABLE are touched, never the text of a trigger scripted along with its table.
+    // the CREATE TABLE, or of the CREATE FUNCTION of a CLR function, are touched, never the text of a
+    // trigger scripted along with its table.
     private static string KeepOwnCollations(string statement, string databaseCollation) =>
         statement.StartsWith("CREATE TABLE", StringComparison.Ordinal)
+        || statement.StartsWith("CREATE FUNCTION", StringComparison.Ordinal)
             ? ColumnCollation().Replace(statement, match =>
                 string.Equals(match.Groups["collation"].Value, databaseCollation, StringComparison.OrdinalIgnoreCase)
                     ? match.Groups["column"].Value
@@ -1538,6 +1566,7 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         ?? (IScriptable?)database.Views[name, schema]
         ?? (IScriptable?)database.StoredProcedures[name, schema]
         ?? (IScriptable?)database.UserDefinedFunctions[name, schema]
+        ?? (IScriptable?)database.UserDefinedAggregates[name, schema]
         ?? database.Sequences[name, schema];
 
     // The table or view a DML trigger belongs to; null for anything else.

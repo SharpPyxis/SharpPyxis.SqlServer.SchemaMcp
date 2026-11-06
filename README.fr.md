@@ -355,9 +355,9 @@ Le serveur MCP propose huit outils, et un neuvième quand vous fournissez un fic
 
 | Outil | Ce qu'il renvoie |
 | --- | --- |
-| `list_objects` | La liste des tables, vues, procédures, fonctions, déclencheurs et séquences. Elle se filtre par schéma, par nom, par type d'objet ou par date de modification. Pour chaque table, il donne son nombre approximatif de lignes, ce qui fait apparaître d'emblée la table principale parmi ses satellites. Pour chaque vue, procédure, fonction ou déclencheur, il donne la longueur de son texte : l'agent sait ce qu'un objet coûtera à lire avant de le demander. |
-| `describe_object` | Un résumé compact de la structure d'un objet. Pour une table : son nombre approximatif de lignes, ses colonnes et leurs types, ses clés, ses index, ses clés étrangères, ses contraintes de vérification et ses déclencheurs. Pour une vue : ses colonnes. Pour une procédure ou une fonction : ses paramètres. Pour un déclencheur : la table sur laquelle il se déclenche, et quand. Sur demande, les descriptions (`MS_Description`) de l'objet et de ses colonnes. |
-| `script_object` | Le script `CREATE` complet d'un objet, tel que SSMS le produit. L'agent l'utilise quand il doit modifier l'objet, et `describe_object` quand il lui suffit d'en connaître la structure. |
+| `list_objects` | La liste des tables, vues, procédures, fonctions, déclencheurs, agrégats et séquences, ceux du CLR compris. Elle se filtre par schéma, par nom, par type d'objet ou par date de modification. Pour chaque table, il donne son nombre approximatif de lignes, ce qui fait apparaître d'emblée la table principale parmi ses satellites. Pour chaque vue, procédure, fonction ou déclencheur, il donne la longueur de son texte : l'agent sait ce qu'un objet coûtera à lire avant de le demander. |
+| `describe_object` | Un résumé compact de la structure d'un objet. Pour une table : son nombre approximatif de lignes, ses colonnes et leurs types, ses clés, ses index, ses clés étrangères, ses contraintes de vérification et ses déclencheurs. Pour une vue : ses colonnes. Pour une procédure, une fonction ou un agrégat : ses paramètres. Pour un déclencheur : la table sur laquelle il se déclenche, et quand. Pour un objet CLR : la méthode de son assemblage qui l'implémente, et le niveau de permission de cet assemblage. Sur demande, les descriptions (`MS_Description`) de l'objet et de ses colonnes. |
+| `script_object` | Le script `CREATE` complet d'un objet, tel que SSMS le produit ; pour un objet CLR, sa signature et la méthode qu'il appelle. L'agent l'utilise quand il doit modifier l'objet, et `describe_object` quand il lui suffit d'en connaître la structure. |
 | `find_references` | Ce qui utilise un objet : les vues, procédures, fonctions et déclencheurs qui s'appuient sur lui, et les tables dont les clés étrangères pointent vers lui. Ou, dans l'autre sens, ce que cet objet utilise. |
 | `search_modules` | Les lignes du texte des vues, procédures, fonctions et déclencheurs qui contiennent un fragment, avec leurs numéros de ligne et, sur demande, quelques lignes autour. |
 | `find_columns` | Les tables et les vues qui ont une colonne d'un nom donné, avec le type de cette colonne. |
@@ -411,6 +411,9 @@ Ce sont les conventions d'une équipe, publiées à titre d'exemple, et rien de 
   procédures et les fonctions, elle indique bien la dernière modification du code.
 - Les déclencheurs de base de données, ceux qui réagissent aux instructions DDL, ne sont pas couverts :
   ils n'appartiennent à aucun schéma. Les déclencheurs de tables et de vues le sont.
+- Le code d'un objet CLR vit dans son assemblage, que le serveur MCP ne lit pas. Il donne la signature
+  de l'objet et la méthode qui l'implémente, et `search_modules` ne le trouve pas. Les assemblages et
+  les types CLR ne sont pas listés.
 
 ## Ce que cela coûte
 
