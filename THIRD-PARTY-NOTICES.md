@@ -13,7 +13,7 @@ file, and your use of it is subject to those terms.
 
 ## The .NET runtime
 
-The executable contains the .NET runtime 10.0.11, under the MIT license reproduced below. The runtime
+The executable contains the .NET runtime 10.0.14, under the MIT license reproduced below. The runtime
 carries its own third-party notices, in the file `THIRD-PARTY-NOTICES.TXT` attached to each release
 next to the executable.
 
@@ -29,36 +29,36 @@ next to the executable.
 | `Microsoft.Bcl.Cryptography` | 9.0.4 | MIT | © Microsoft Corporation. All rights reserved. |
 | `Microsoft.Data.SqlClient` | 6.1.3 | MIT | © Microsoft Corporation. All rights reserved. |
 | `Microsoft.Data.SqlClient.SNI.runtime` | 6.0.2 | Microsoft Software License Terms | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.AI.Abstractions` | 10.8.3 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.Caching.Abstractions` | 10.0.10 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.AI.Abstractions` | 10.11.0 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.Caching.Abstractions` | 10.0.13 | MIT | © Microsoft Corporation. All rights reserved. |
 | `Microsoft.Extensions.Caching.Memory` | 9.0.4 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.Configuration` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.Configuration.Abstractions` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.Configuration.Binder` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.Configuration.CommandLine` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.Configuration.EnvironmentVariables` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.Configuration.FileExtensions` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.Configuration.Json` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.Configuration.UserSecrets` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.DependencyInjection` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.DependencyInjection.Abstractions` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.Diagnostics` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.Diagnostics.Abstractions` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.FileProviders.Abstractions` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.FileProviders.Physical` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.FileSystemGlobbing` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.Hosting` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.Hosting.Abstractions` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.Logging` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.Logging.Abstractions` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.Logging.Configuration` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.Logging.Console` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.Logging.Debug` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.Logging.EventLog` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.Logging.EventSource` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.Options` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.Options.ConfigurationExtensions` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.Extensions.Primitives` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.Configuration` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.Configuration.Abstractions` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.Configuration.Binder` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.Configuration.CommandLine` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.Configuration.EnvironmentVariables` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.Configuration.FileExtensions` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.Configuration.Json` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.Configuration.UserSecrets` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.DependencyInjection` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.DependencyInjection.Abstractions` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.Diagnostics` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.Diagnostics.Abstractions` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.FileProviders.Abstractions` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.FileProviders.Physical` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.FileSystemGlobbing` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.Hosting` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.Hosting.Abstractions` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.Logging` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.Logging.Abstractions` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.Logging.Configuration` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.Logging.Console` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.Logging.Debug` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.Logging.EventLog` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.Logging.EventSource` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.Options` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.Options.ConfigurationExtensions` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `Microsoft.Extensions.Primitives` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
 | `Microsoft.Identity.Client` | 4.73.1 | MIT | © Microsoft Corporation. All rights reserved. |
 | `Microsoft.Identity.Client.Extensions.Msal` | 4.73.1 | MIT | © Microsoft Corporation. All rights reserved. |
 | `Microsoft.IdentityModel.Abstractions` | 7.7.1 | MIT | © Microsoft Corporation. All rights reserved. |
@@ -68,20 +68,20 @@ next to the executable.
 | `Microsoft.IdentityModel.Protocols.OpenIdConnect` | 7.7.1 | MIT | © Microsoft Corporation. All rights reserved. |
 | `Microsoft.IdentityModel.Tokens` | 7.7.1 | MIT | © Microsoft Corporation. All rights reserved. |
 | `Microsoft.SqlServer.Server` | 1.0.0 | MIT | © Microsoft Corporation. All rights reserved. |
-| `Microsoft.SqlServer.SqlManagementObjects` | 181.36.0 | MIT | © Microsoft Corporation. All rights reserved. |
-| `ModelContextProtocol` | 2.2.0 | Apache-2.0 | © Model Context Protocol a Series of LF Projects, LLC. |
-| `ModelContextProtocol.Core` | 2.2.0 | Apache-2.0 | © Model Context Protocol a Series of LF Projects, LLC. |
+| `Microsoft.SqlServer.SqlManagementObjects` | 181.37.1 | MIT | © Microsoft Corporation. All rights reserved. |
+| `ModelContextProtocol` | 2.3.1 | Apache-2.0 | © Model Context Protocol a Series of LF Projects, LLC. |
+| `ModelContextProtocol.Core` | 2.3.1 | Apache-2.0 | © Model Context Protocol a Series of LF Projects, LLC. |
 | `System.ClientModel` | 1.5.1 | MIT | © Microsoft Corporation. All rights reserved. |
 | `System.CodeDom` | 8.0.0 | MIT | © Microsoft Corporation. All rights reserved. |
 | `System.Configuration.ConfigurationManager` | 9.0.4 | MIT | © Microsoft Corporation. All rights reserved. |
 | `System.Data.OleDb` | 8.0.0 | MIT | © Microsoft Corporation. All rights reserved. |
-| `System.Diagnostics.EventLog` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
+| `System.Diagnostics.EventLog` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
 | `System.Diagnostics.PerformanceCounter` | 8.0.0 | MIT | © Microsoft Corporation. All rights reserved. |
 | `System.IdentityModel.Tokens.Jwt` | 7.7.1 | MIT | © Microsoft Corporation. All rights reserved. |
 | `System.Management` | 8.0.0 | MIT | © Microsoft Corporation. All rights reserved. |
 | `System.Memory.Data` | 8.0.1 | MIT | © Microsoft Corporation. All rights reserved. |
-| `System.Security.Cryptography.Pkcs` | 9.0.4 | MIT | © Microsoft Corporation. All rights reserved. |
-| `System.Security.Cryptography.ProtectedData` | 10.0.12 | MIT | © Microsoft Corporation. All rights reserved. |
+| `System.Security.Cryptography.Pkcs` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
+| `System.Security.Cryptography.ProtectedData` | 10.0.14 | MIT | © Microsoft Corporation. All rights reserved. |
 | `System.Security.Permissions` | 8.0.0 | MIT | © Microsoft Corporation. All rights reserved. |
 | `System.Windows.Extensions` | 8.0.0 | MIT | © Microsoft Corporation. All rights reserved. |
 
