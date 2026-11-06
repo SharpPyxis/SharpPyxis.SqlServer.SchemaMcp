@@ -125,7 +125,15 @@ go
 
 -- Trap: the same name as sales.customer, so an unqualified name is ambiguous. It also carries a
 -- siret column, like its namesake.
-create table legacy.customer (customer_id int not null, name nvarchar(200) null, siret char(14) null);
+-- Trap: legacy_code has a collation of its own, where name keeps the database's. A join on it
+-- against a column of the database's collation fails, so it is shown; the others are not.
+create table legacy.customer
+(
+    customer_id int not null,
+    name nvarchar(200) null,
+    siret char(14) null,
+    legacy_code varchar(20) collate Latin1_General_BIN2 not null
+);
 go
 
 -- Traps: names holding the characters LIKE reads as a pattern.

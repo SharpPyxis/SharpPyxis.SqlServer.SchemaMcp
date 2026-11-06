@@ -42,6 +42,14 @@ public sealed class FindColumnsTests(DemoDatabase database)
     }
 
     [Fact]
+    public async Task ACollationOtherThanTheDatabasesFollowsTheType()
+    {
+        var rows = ToolOutput.Rows(await database.CreateTools().FindColumns("legacy_code"));
+
+        Assert.Equal("table\tlegacy.customer\tlegacy_code\tvarchar(20) collate Latin1_General_BIN2\tnot null", Assert.Single(rows));
+    }
+
+    [Fact]
     public async Task TooManyMatchesReturnTheSpreadByColumnName()
     {
         var result = await database.CreateTools(maxResults: 3).FindColumns("id");

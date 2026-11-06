@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- A column whose collation is not the database's now shows it: after its type in `describe_object`
+  and `find_columns`, and as a `COLLATE` clause in the table that `script_object` returns. A
+  column that shares the database's collation shows none, as before.
+
 ## [0.1.2] - 2026-10-02
 
 ### Fixed

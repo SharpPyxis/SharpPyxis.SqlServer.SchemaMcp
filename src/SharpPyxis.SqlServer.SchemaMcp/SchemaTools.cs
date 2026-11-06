@@ -991,7 +991,7 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
     /// <summary>Finds the tables and views carrying a column of that name, across the database.</summary>
     [McpServerTool(Name = "find_columns", ReadOnly = true, Idempotent = true)]
     [Description("Finds the tables and views of a SQL Server database carrying a column whose name matches, "
-               + "with the column's type and nullability. Use it for 'which tables have a siret column', or to "
+               + "with the column's type, its collation when it is not the database's, and nullability. Use it for 'which tables have a siret column', or to "
                + "follow a key across the database. A common fragment such as 'id' matches thousands of "
                + "columns: a call matching too many returns how they spread, by column name first, rather than "
                + "the rows.")]
@@ -1037,7 +1037,7 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
 
         var query = $"""
             select top (@limit) s.name, o.name, o.type_desc, c.name, type_name(c.user_type_id),
-                                c.max_length, c.precision, c.scale, c.is_nullable
+                                c.max_length, c.precision, c.scale, c.is_nullable, {OwnCollation}
             {ColumnSource}
             order by s.name, o.name, c.column_id;
             """;
@@ -1052,7 +1052,8 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         {
             while (await reader.ReadAsync(cancellationToken))
             {
-                var type = FormatType(reader.GetString(4), reader.GetInt16(5), reader.GetByte(6), reader.GetByte(7));
+                var type = FormatType(reader.GetString(4), reader.GetInt16(5), reader.GetByte(6), reader.GetByte(7),
+                                      reader.IsDBNull(9) ? null : reader.GetString(9));
                 var nullability = reader.GetBoolean(8) ? "null" : "not null";
                 report.AppendLine($"{TypeWord(reader.GetString(2))}\t{reader.GetString(0)}.{reader.GetString(1)}\t{reader.GetString(3)}\t{type}\t{nullability}");
                 returned++;
@@ -1103,19 +1104,31 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         AddFilterParameters(command, schema, null, objectType, null);
     }
 
+    // The collation of a column when it is not the database's, null otherwise: a database whose text
+    // columns all share its collation pays nothing for it. The catalog keeps no trace of a COLLATE
+    // that repeats the database's, so the two cannot be told apart, and need not be.
+    private const string OwnCollation =
+        "case when c.collation_name <> cast(databasepropertyex(db_name(), 'Collation') as nvarchar(128)) "
+        + "then c.collation_name end";
+
     // Written as the DDL writes it, so the model reads the type it would declare.
-    private static string FormatType(string type, short maxLength, byte precision, byte scale) => type switch
+    private static string FormatType(string type, short maxLength, byte precision, byte scale, string? collation = null)
     {
-        "varchar" or "char" or "varbinary" or "binary" => $"{type}({(maxLength == -1 ? "max" : maxLength)})",
-        "nvarchar" or "nchar" => $"{type}({(maxLength == -1 ? "max" : maxLength / 2)})",
-        "decimal" or "numeric" => $"{type}({precision}, {scale})",
-        "datetime2" or "datetimeoffset" or "time" => $"{type}({scale})",
-        _ => type,
-    };
+        var declared = type switch
+        {
+            "varchar" or "char" or "varbinary" or "binary" => $"{type}({(maxLength == -1 ? "max" : maxLength)})",
+            "nvarchar" or "nchar" => $"{type}({(maxLength == -1 ? "max" : maxLength / 2)})",
+            "decimal" or "numeric" => $"{type}({precision}, {scale})",
+            "datetime2" or "datetimeoffset" or "time" => $"{type}({scale})",
+            _ => type,
+        };
+
+        return collation is null ? declared : $"{declared} collate {collation}";
+    }
 
     // One batch, one result set per part of the description. Column lists are assembled in C# rather
     // than with STRING_AGG, which older instances do not have.
-    private const string DescribeQuery = """
+    private const string DescribeQuery = $"""
         declare @id int = object_id(quotename(@targetSchema) + N'.' + quotename(@targetName));
 
         select o.type_desc,
@@ -1129,7 +1142,7 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
 
         select c.name, type_name(c.user_type_id), c.max_length, c.precision, c.scale, c.is_nullable,
                cast(ic.seed_value as nvarchar(40)), cast(ic.increment_value as nvarchar(40)),
-               dc.definition, cc.definition, cast(ep.value as nvarchar(4000))
+               dc.definition, cc.definition, cast(ep.value as nvarchar(4000)), {OwnCollation}
         from sys.columns as c
         left join sys.identity_columns as ic on ic.object_id = c.object_id and ic.column_id = c.column_id
         left join sys.default_constraints as dc on dc.object_id = c.default_object_id
@@ -1191,7 +1204,8 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
     [McpServerTool(Name = "describe_object", ReadOnly = true, Idempotent = true)]
     [Description("Describes the structure of one table, view, procedure, function or trigger of a SQL Server database, "
                + "in a compact form. For a table: its approximate number "
-               + "of rows, its columns with their types, nullability, identity, defaults and computed expressions, "
+               + "of rows, its columns with their types, a collation that is not the database's, nullability, "
+               + "identity, defaults and computed expressions, "
                + "its keys, indexes, outgoing foreign keys, checks and triggers. For a view: its columns. For a "
                + "procedure or a function: its parameters. For a trigger: the table it fires on, and when. Use it "
                + "to write a query against the object; for the "
@@ -1238,7 +1252,7 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         while (reader.Read())
         {
             var line = new StringBuilder(
-                $"{reader.GetString(0)}\t{FormatType(reader.GetString(1), reader.GetInt16(2), reader.GetByte(3), reader.GetByte(4))}"
+                $"{reader.GetString(0)}\t{FormatType(reader.GetString(1), reader.GetInt16(2), reader.GetByte(3), reader.GetByte(4), reader.IsDBNull(11) ? null : reader.GetString(11))}"
                 + $"\t{(reader.GetBoolean(5) ? "null" : "not null")}");
             if (!reader.IsDBNull(6))
                 line.Append($"\tidentity({reader.GetString(6)}, {reader.GetString(7)})");
@@ -1365,8 +1379,8 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
     /// <summary>Scripts one object with SMO, the engine SSMS uses.</summary>
     [McpServerTool(Name = "script_object", ReadOnly = true, Idempotent = true)]
     [Description("Returns the complete CREATE script of one object of a SQL Server database, as SSMS generates "
-               + "it: tables with constraints, indexes and triggers; views, procedures, functions and triggers with their "
-               + "original text. Use it to change or rewrite an object, or to see how existing code is written. "
+               + "it: tables with constraints, indexes and triggers, a column carrying COLLATE only when its collation "
+               + "is not the database's; views, procedures, functions and triggers with their original text. Use it to change or rewrite an object, or to see how existing code is written. "
                + "A procedure can run to hundreds of thousands of characters: when the object may be large, "
                + "read its length in list_objects first.")]
     public string ScriptObject(
@@ -1398,8 +1412,11 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
             if (scriptable is null)
                 return active.Stamp($"Object {schema}.{name} cannot be scripted.");
 
-            var statements = scriptable.Script(CreateScriptingOptions());
-            var script = string.Join($"{Environment.NewLine}GO{Environment.NewLine}", statements.Cast<string>())
+            var statements = scriptable.Script(CreateScriptingOptions()).Cast<string>();
+            if (scriptable is Table)
+                statements = statements.Select(statement => KeepOwnCollations(statement, database.Collation));
+
+            var script = string.Join($"{Environment.NewLine}GO{Environment.NewLine}", statements)
                        + $"{Environment.NewLine}GO{Environment.NewLine}";
 
             return active.Stamp(CollapseBlankLines(script));
@@ -1418,6 +1435,23 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
 
     [GeneratedRegex(@"\n{3,}")]
     private static partial Regex BlankLineRun();
+
+    // SMO writes a COLLATE on every text column or none (measured, SMO 181): the one a column shares
+    // with the database is noise, the one it does not is what a join trips on. Only the column lines of
+    // the CREATE TABLE are touched, never the text of a trigger scripted along with its table.
+    private static string KeepOwnCollations(string statement, string databaseCollation) =>
+        statement.StartsWith("CREATE TABLE", StringComparison.Ordinal)
+            ? ColumnCollation().Replace(statement, match =>
+                string.Equals(match.Groups["collation"].Value, databaseCollation, StringComparison.OrdinalIgnoreCase)
+                    ? match.Groups["column"].Value
+                    : match.Value)
+            : statement;
+
+    // A column line as SMO writes it: a tab, the bracketed name, the type, optionally qualified by its
+    // schema and followed by its length, then the clause. A computed column has AS where the type is.
+    [GeneratedRegex(@"^(?<column>\t\[(?:[^\]]|\]\])*\] (?:\[(?:[^\]]|\]\])*\]\.)?\[(?:[^\]]|\]\])*\](?:\([^)]*\))?) COLLATE (?<collation>\w+)",
+                    RegexOptions.Multiline)]
+    private static partial Regex ColumnCollation();
 
     // Splits on the first dot only: a schema name cannot contain one unless it is quoted, which the
     // brackets are stripped for.
@@ -1532,7 +1566,8 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
         Indexes = true,
         Triggers = true,
         ExtendedProperties = true,
-        NoCollation = true,
+        // A table keeps only the collations that differ from the database's: KeepOwnCollations.
+        NoCollation = false,
         IncludeHeaders = false,
     };
 

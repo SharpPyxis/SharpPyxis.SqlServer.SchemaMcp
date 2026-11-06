@@ -33,6 +33,15 @@ public sealed class DescribeObjectTests(DemoDatabase database)
     }
 
     [Fact]
+    public void OnlyACollationOtherThanTheDatabasesIsShown()
+    {
+        var result = database.CreateTools().DescribeObject("legacy.customer");
+
+        Assert.Contains("\nlegacy_code\tvarchar(20) collate Latin1_General_BIN2\tnot null\n", result);
+        Assert.Contains("\nname\tnvarchar(200)\tnull\n", result);
+    }
+
+    [Fact]
     public void DescriptionsComeOnlyWhenAskedFor()
     {
         var tools = database.CreateTools();

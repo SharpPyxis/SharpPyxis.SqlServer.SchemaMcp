@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Xunit;
 
 namespace SharpPyxis.SqlServer.SchemaMcp.Tests;
@@ -27,6 +28,16 @@ public sealed class ScriptObjectTests(DemoDatabase database)
         var result = database.CreateTools().ScriptObject("[legacy].[odd[name]");
 
         Assert.Contains("CREATE TABLE", result);
+    }
+
+    [Fact]
+    public void ATableKeepsOnlyTheCollationsThatAreNotTheDatabases()
+    {
+        var result = database.CreateTools().ScriptObject("legacy.customer");
+
+        Assert.Contains("[legacy_code] [varchar](20) COLLATE Latin1_General_BIN2 NOT NULL", result);
+        Assert.Contains("[name] [nvarchar](200) NULL", result);
+        Assert.Single(Regex.Matches(result, "COLLATE"));
     }
 
     [Fact]
