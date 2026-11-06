@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.3] - 2026-11-06
 
 ### Added
 
@@ -32,6 +32,14 @@ All notable changes to this project are documented in this file. The format foll
   runs from `sqlcmd`, which does not set `QUOTED_IDENTIFIER` as SSMS does.
 - `Create-DdlReaderLogin.sql` denies the diagram procedures only where they exist when it runs.
   Its comments and the READMEs now say to run that step again when diagrams come later.
+
+### Security
+
+- `System.Security.Cryptography.Pkcs`, brought by `Microsoft.Data.SqlClient`, goes from 9.0.4 to
+  10.0.14, past two advisories published on 2026-10-13: CVE-2026-84008 and CVE-2026-70162, both a
+  denial of service.
+- The executable contains the .NET runtime 10.0.14, an out-of-band security update, instead of
+  10.0.11.
 
 ## [0.1.2] - 2026-10-02
 
@@ -76,6 +84,7 @@ database, and never its data.
 - A demo database, `db/Create-DemoDatabase.sql`, to try the server away from any real database.
 - An example of a conventions file, in `examples/`.
 
+[0.1.3]: https://github.com/SharpPyxis/SharpPyxis.SqlServer.SchemaMcp/releases/tag/v0.1.3
 [0.1.2]: https://github.com/SharpPyxis/SharpPyxis.SqlServer.SchemaMcp/releases/tag/v0.1.2
 [0.1.1]: https://github.com/SharpPyxis/SharpPyxis.SqlServer.SchemaMcp/releases/tag/v0.1.1
 [0.1.0]: https://github.com/SharpPyxis/SharpPyxis.SqlServer.SchemaMcp/releases/tag/v0.1.0
