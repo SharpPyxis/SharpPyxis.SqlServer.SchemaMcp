@@ -19,7 +19,8 @@
 --      database is refused by SQL Server with error 229.
 --   3. The login writes nothing: it holds no right to insert, update, delete or execute, no right to
 --      create, alter or control anything in the database, and an actual attempt to create a table is
---      refused with error 262.
+--      refused with error 262. Two procedures are admitted by name, both of which only read: see the
+--      check itself.
 --   4. The dependency functions answer: the MCP server reads them to tell what uses an object.
 --
 -- A FAIL on check 2 or 3 means the login holds more rights than it should: through another role, through
@@ -29,7 +30,7 @@
 set nocount on;
 
 declare @verdicts table (step int, check_name nvarchar(40), verdict char(4), detail nvarchar(400));
-declare @count int, @modules int, @table nvarchar(300), @outcome nvarchar(400), @refused bit;
+declare @count int, @admitted int, @modules int, @table nvarchar(300), @outcome nvarchar(400), @refused bit;
 
 -- The table the reads are tried on: the first user table of the database, by name, taken from the catalog.
 select top (1) @table = quotename(schema_name(schema_id)) + N'.' + quotename(name)
@@ -80,6 +81,11 @@ values (2, N'reads no data', iif(@count = 0 and @refused = 1, 'PASS', 'FAIL'),
 -- 3. It writes nothing. First, what the rights say: rights to change a table or a view, rights to
 --    execute a procedure, since a procedure can write, and rights on the database itself, such as
 --    creating or altering objects. Then what the engine does: an actual attempt to create a table.
+--
+--    Where SSMS installed database diagrams, public may execute dbo.sp_helpdiagrams and
+--    dbo.sp_helpdiagramdefinition. Both only read, and return a diagram to its owner or to db_owner
+--    alone: they are admitted, and counted apart. The four procedures that write diagrams are denied
+--    by Create-DdlReaderLogin.sql, and stay counted here.
 select @count = count(*)
 from sys.objects as o
 cross apply (select quotename(schema_name(o.schema_id)) + N'.' + quotename(o.name) as name) as q
@@ -89,7 +95,14 @@ where (o.type in ('U', 'V')
             or has_perms_by_name(q.name, N'OBJECT', N'UPDATE') = 1
             or has_perms_by_name(q.name, N'OBJECT', N'DELETE') = 1))
    or (o.type in ('P', 'PC', 'X')
+       and not (o.schema_id = schema_id(N'dbo') and o.name in (N'sp_helpdiagrams', N'sp_helpdiagramdefinition'))
        and has_perms_by_name(q.name, N'OBJECT', N'EXECUTE') = 1);
+
+select @admitted = count(*)
+from sys.objects as o
+where o.schema_id = schema_id(N'dbo')
+  and o.name in (N'sp_helpdiagrams', N'sp_helpdiagramdefinition')
+  and has_perms_by_name(N'[dbo].' + quotename(o.name), N'OBJECT', N'EXECUTE') = 1;
 
 select @count += count(*)
 from fn_my_permissions(null, N'DATABASE')
@@ -117,7 +130,8 @@ end catch;
 
 insert into @verdicts
 values (3, N'writes nothing', iif(@count = 0 and @refused = 1, 'PASS', 'FAIL'),
-        concat(@count, N' rights to write held; ', @outcome));
+        concat(@count, N' rights to write held; ', @outcome,
+               iif(@admitted > 0, concat(N'; ', @admitted, N' diagram procedures that only read admitted'), N'')));
 
 -- 4. The dependency functions answer. find_references, one of the tools of the MCP server, relies on
 --    sys.dm_sql_referencing_entities, which works with VIEW DEFINITION alone.

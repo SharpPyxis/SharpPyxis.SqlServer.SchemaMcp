@@ -17,6 +17,12 @@ All notable changes to this project are documented in this file. The format foll
 - The description of `read_conventions` names the mistakes to avoid among what a conventions file
   holds, so the agent looks there for them too.
 
+### Fixed
+
+- `Verify-DdlReaderRights.sql` failed its check 3 on a database where SSMS installed database
+  diagrams: every user may run `dbo.sp_helpdiagrams` and `dbo.sp_helpdiagramdefinition` there. Both
+  only read, and the check now admits them by name, and says so in its detail.
+
 ## [0.1.2] - 2026-10-02
 
 ### Fixed

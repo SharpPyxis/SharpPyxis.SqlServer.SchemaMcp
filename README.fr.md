@@ -235,7 +235,10 @@ Le script ne modifie rien. Il fait quatre contrôles et rend pour chacun un verd
 3. **Le login n'écrit rien.** Il ne détient aucun droit d'insérer, de modifier, de supprimer ou
    d'exécuter, ni aucun droit de créer ou de modifier un objet de la base. Et une tentative réelle de
    création de table est refusée (erreur 262). Cette tentative s'exécute dans une transaction annulée :
-   même si elle réussissait, il n'en resterait rien.
+   même si elle réussissait, il n'en resterait rien. Deux procédures sont admises : là où SSMS a
+   installé les diagrammes de base de données, tout utilisateur peut exécuter `dbo.sp_helpdiagrams` et
+   `dbo.sp_helpdiagramdefinition`. Toutes deux ne font que lire, et ne rendent un diagramme qu'à son
+   propriétaire ou à `db_owner`. Le détail du contrôle dit quand il les a admises.
 4. **Les fonctions de dépendances répondent.** L'outil `find_references` du serveur MCP en a besoin.
 
 Voici le résultat sur la base de démonstration de ce dépôt. Sur votre base, les nombres et le nom de la

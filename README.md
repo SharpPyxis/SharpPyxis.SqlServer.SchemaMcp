@@ -223,7 +223,9 @@ The script changes nothing. It makes four checks and gives each one a verdict, P
 3. **The login writes nothing.** It holds no right to insert, update, delete or execute, and no right to
    create or alter an object of the database. And an actual attempt to create a table is refused
    (error 262). That attempt runs inside a transaction that is rolled back: even if it succeeded,
-   nothing would remain.
+   nothing would remain. Two procedures are admitted: where SSMS installed database diagrams, every
+   user may run `dbo.sp_helpdiagrams` and `dbo.sp_helpdiagramdefinition`. Both only read, and return a
+   diagram to its owner or to `db_owner` alone. The detail of the check says when it admitted them.
 4. **The dependency functions answer.** The `find_references` tool of the MCP server needs them.
 
 Here is the result on the demo database of this repository. On your database, the numbers and the name
