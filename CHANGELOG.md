@@ -12,6 +12,11 @@ All notable changes to this project are documented in this file. The format foll
   and `find_columns`, and as a `COLLATE` clause in the table that `script_object` returns. A
   column that shares the database's collation shows none, as before.
 
+### Changed
+
+- The description of `read_conventions` names the mistakes to avoid among what a conventions file
+  holds, so the agent looks there for them too.
+
 ## [0.1.2] - 2026-10-02
 
 ### Fixed

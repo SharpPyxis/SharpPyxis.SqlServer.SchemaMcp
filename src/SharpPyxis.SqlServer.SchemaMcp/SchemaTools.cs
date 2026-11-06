@@ -261,8 +261,8 @@ internal sealed partial class SchemaTools(SchemaSettings settings, ConnectionSto
     /// <summary>Returns the conventions file of the team, as the team wrote it.</summary>
     [McpServerTool(Name = "read_conventions", ReadOnly = true, Idempotent = true)]
     [Description("Returns the SQL writing conventions of the team working on this SQL Server database, as the "
-               + "team wrote them: naming, types, how a script is laid out. Call it before writing or changing "
-               + "SQL — a query, a procedure, a table. Where the existing code does something else, follow the "
+               + "team wrote them: naming, types, how a script is laid out, the mistakes to avoid. Call it before "
+               + "writing or changing SQL — a query, a procedure, a table. Where the existing code does something else, follow the "
                + "conventions, and say so.")]
     public string ReadConventions()
     {
