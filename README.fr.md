@@ -205,7 +205,9 @@ dans SSMS, quatre procédures sont installées dans le schéma `dbo` : `sp_creat
 `sp_alterdiagram`, `sp_renamediagram` et `sp_dropdiagram`. Elles écrivent dans la table
 `dbo.sysdiagrams`. Et le rôle `public`, auquel appartient chaque utilisateur de la base, est autorisé à
 les exécuter. C'est la seule voie d'écriture que les droits par défaut d'une base laissent ouverte. Le
-script la ferme, procédure par procédure, et seulement là où la procédure existe.
+script la ferme, procédure par procédure, et seulement là où la procédure existe. Des diagrammes
+créés après le passage du script ramènent les quatre procédures, ouvertes à `public` : relancez alors
+l'étape 5. `Verify-DdlReaderRights.sql` les nomme quand il les trouve.
 
 **Aucun autre refus.** Il est tentant de tout refuser d'un coup, par exemple avec un `deny select` sur
 toute la base. Ce serait une erreur. Un tel refus s'appliquerait aussi aux vues système du schéma

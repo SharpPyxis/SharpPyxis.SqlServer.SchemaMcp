@@ -195,7 +195,8 @@ are installed in the `dbo` schema: `sp_creatediagram`, `sp_alterdiagram`, `sp_re
 `sp_dropdiagram`. They write into the table `dbo.sysdiagrams`. And the role `public`, which every user of
 the database belongs to, is allowed to run them. This is the only way to write that the default rights
 of a database leave open. The script closes it, procedure by procedure, and only where the procedure
-exists.
+exists. Diagrams created after the script ran bring the four procedures back, open to `public`: run
+step 5 again then. `Verify-DdlReaderRights.sql` names them when it finds them.
 
 **No other deny.** It is tempting to refuse everything at once, for example with a `deny select` on the
 whole database. That would be a mistake. Such a deny would also apply to the system views of the `sys`

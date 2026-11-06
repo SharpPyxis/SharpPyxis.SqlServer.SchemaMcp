@@ -22,6 +22,11 @@ All notable changes to this project are documented in this file. The format foll
 - `Verify-DdlReaderRights.sql` failed its check 3 on a database where SSMS installed database
   diagrams: every user may run `dbo.sp_helpdiagrams` and `dbo.sp_helpdiagramdefinition` there. Both
   only read, and the check now admits them by name, and says so in its detail.
+- A failed check of `Verify-DdlReaderRights.sql` gave a count and no name. Checks 2 and 3 now name
+  what they found, the first five at most, and the conclusion says the detail does. The script also
+  runs from `sqlcmd`, which does not set `QUOTED_IDENTIFIER` as SSMS does.
+- `Create-DdlReaderLogin.sql` denies the diagram procedures only where they exist when it runs.
+  Its comments and the READMEs now say to run that step again when diagrams come later.
 
 ## [0.1.2] - 2026-10-02
 

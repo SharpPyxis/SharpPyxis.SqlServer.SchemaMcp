@@ -79,7 +79,9 @@ go
 -- 5. The only writes left open by the default rights of a database. When database diagrams are used in
 --    SSMS, four procedures are installed in the dbo schema. They write into the table dbo.sysdiagrams,
 --    and the role public, which every user of the database belongs to, may execute them. Each one gets
---    a deny, when it exists.
+--    a deny, when it exists. Diagrams installed after this script ran bring the four procedures back,
+--    open to public: run these four lines again then. Verify-DdlReaderRights.sql names them when it
+--    finds them.
 --
 --    No other deny, on purpose. A deny on the whole database, such as a deny select, would also refuse
 --    the catalog views of the sys schema, the views that describe the objects: exactly what the MCP

@@ -24,13 +24,19 @@
 --   4. The dependency functions answer: the MCP server reads them to tell what uses an object.
 --
 -- A FAIL on check 2 or 3 means the login holds more rights than it should: through another role, through
--- a right granted to public, or because it is an administrator. The detail column says what was found.
--- Run as a sysadmin, this script fails on both checks, as it should.
+-- a right granted to public, or because it is an administrator. The detail column names what was found,
+-- the first five at most. Run as a sysadmin, this script fails on both checks, as it should.
 
 set nocount on;
+-- The list of names in the detail goes through an XML method, which SQL Server refuses without it.
+-- SSMS sets it by default, sqlcmd does not.
+set quoted_identifier on;
 
-declare @verdicts table (step int, check_name nvarchar(40), verdict char(4), detail nvarchar(400));
-declare @count int, @admitted int, @modules int, @table nvarchar(300), @outcome nvarchar(400), @refused bit;
+declare @verdicts table (step int, check_name nvarchar(40), verdict char(4), detail nvarchar(max));
+-- What checks 2 and 3 found, one line per table, procedure or right, for the detail to name them.
+declare @found table (step int, item nvarchar(400));
+declare @count int, @admitted int, @modules int, @table nvarchar(300), @outcome nvarchar(400), @refused bit,
+        @list nvarchar(max);
 
 -- The table the reads are tried on: the first user table of the database, by name, taken from the catalog.
 select top (1) @table = quotename(schema_name(schema_id)) + N'.' + quotename(name)
@@ -48,12 +54,20 @@ values (1, N'sees the definitions', iif(@count > 0, 'PASS', 'FAIL'),
 
 -- 2. It reads no data. First, what the rights say: the number of tables and views that grant it SELECT,
 --    as SQL Server computes them for the current login. Then what the engine does: an actual read.
-select @count = count(*)
+insert into @found (step, item)
+select 2, q.name
 from sys.objects as o
 cross apply (select quotename(schema_name(o.schema_id)) + N'.' + quotename(o.name) as name) as q
 where o.is_ms_shipped = 0
   and o.type in ('U', 'V')
   and has_perms_by_name(q.name, N'OBJECT', N'SELECT') = 1;
+
+-- The first five names, then how many more. FOR XML PATH rather than STRING_AGG, which instances older
+-- than SQL Server 2017 do not have.
+select @count = count(*) from @found where step = 2;
+set @list = stuff((select top (5) N', ' + item from @found where step = 2 order by item
+                   for xml path(N''), type).value(N'.', N'nvarchar(max)'), 1, 2, N'')
+            + iif(@count > 5, concat(N' and ', @count - 5, N' more'), N'');
 
 set @refused = 1;
 if @table is null
@@ -76,7 +90,7 @@ end;
 
 insert into @verdicts
 values (2, N'reads no data', iif(@count = 0 and @refused = 1, 'PASS', 'FAIL'),
-        concat(@count, N' tables or views readable; ', @outcome));
+        concat(@count, N' tables or views readable', iif(@count > 0, N': ' + @list, N''), N'; ', @outcome));
 
 -- 3. It writes nothing. First, what the rights say: rights to change a table or a view, rights to
 --    execute a procedure, since a procedure can write, and rights on the database itself, such as
@@ -85,18 +99,27 @@ values (2, N'reads no data', iif(@count = 0 and @refused = 1, 'PASS', 'FAIL'),
 --    Where SSMS installed database diagrams, public may execute dbo.sp_helpdiagrams and
 --    dbo.sp_helpdiagramdefinition. Both only read, and return a diagram to its owner or to db_owner
 --    alone: they are admitted, and counted apart. The four procedures that write diagrams are denied
---    by Create-DdlReaderLogin.sql, and stay counted here.
-select @count = count(*)
+--    by Create-DdlReaderLogin.sql, and stay counted here: found here, they were installed after it ran.
+insert into @found (step, item)
+select 3, case when o.type in ('U', 'V')
+               then stuff(iif(p.can_insert = 1, N', INSERT', N'') + iif(p.can_update = 1, N', UPDATE', N'')
+                          + iif(p.can_delete = 1, N', DELETE', N''), 1, 2, N'')
+               else N'EXECUTE'
+          end + N' on ' + q.name
 from sys.objects as o
 cross apply (select quotename(schema_name(o.schema_id)) + N'.' + quotename(o.name) as name) as q
-where (o.type in ('U', 'V')
-       and o.is_ms_shipped = 0
-       and (has_perms_by_name(q.name, N'OBJECT', N'INSERT') = 1
-            or has_perms_by_name(q.name, N'OBJECT', N'UPDATE') = 1
-            or has_perms_by_name(q.name, N'OBJECT', N'DELETE') = 1))
-   or (o.type in ('P', 'PC', 'X')
-       and not (o.schema_id = schema_id(N'dbo') and o.name in (N'sp_helpdiagrams', N'sp_helpdiagramdefinition'))
-       and has_perms_by_name(q.name, N'OBJECT', N'EXECUTE') = 1);
+-- Each right is asked only of the objects it applies to: there are tens of thousands on a large database.
+cross apply (select iif(o.type in ('U', 'V') and o.is_ms_shipped = 0,
+                        has_perms_by_name(q.name, N'OBJECT', N'INSERT'), 0) as can_insert,
+                    iif(o.type in ('U', 'V') and o.is_ms_shipped = 0,
+                        has_perms_by_name(q.name, N'OBJECT', N'UPDATE'), 0) as can_update,
+                    iif(o.type in ('U', 'V') and o.is_ms_shipped = 0,
+                        has_perms_by_name(q.name, N'OBJECT', N'DELETE'), 0) as can_delete,
+                    iif(o.type in ('P', 'PC', 'X')
+                        and not (o.schema_id = schema_id(N'dbo')
+                                 and o.name in (N'sp_helpdiagrams', N'sp_helpdiagramdefinition')),
+                        has_perms_by_name(q.name, N'OBJECT', N'EXECUTE'), 0) as can_execute) as p
+where p.can_insert = 1 or p.can_update = 1 or p.can_delete = 1 or p.can_execute = 1;
 
 select @admitted = count(*)
 from sys.objects as o
@@ -104,13 +127,19 @@ where o.schema_id = schema_id(N'dbo')
   and o.name in (N'sp_helpdiagrams', N'sp_helpdiagramdefinition')
   and has_perms_by_name(N'[dbo].' + quotename(o.name), N'OBJECT', N'EXECUTE') = 1;
 
-select @count += count(*)
+insert into @found (step, item)
+select 3, permission_name + N' on the database'
 from fn_my_permissions(null, N'DATABASE')
 where permission_name like N'CREATE%'
    or permission_name like N'ALTER%'
    or permission_name like N'IMPERSONATE%'
    or permission_name like N'BACKUP%'
    or permission_name in (N'CONTROL', N'INSERT', N'UPDATE', N'DELETE', N'EXECUTE', N'TAKE OWNERSHIP');
+
+select @count = count(*) from @found where step = 3;
+set @list = stuff((select top (5) N', ' + item from @found where step = 3 order by item
+                   for xml path(N''), type).value(N'.', N'nvarchar(max)'), 1, 2, N'')
+            + iif(@count > 5, concat(N' and ', @count - 5, N' more'), N'');
 
 begin try
     begin transaction;
@@ -130,7 +159,7 @@ end catch;
 
 insert into @verdicts
 values (3, N'writes nothing', iif(@count = 0 and @refused = 1, 'PASS', 'FAIL'),
-        concat(@count, N' rights to write held; ', @outcome,
+        concat(@count, N' rights to write held', iif(@count > 0, N': ' + @list, N''), N'; ', @outcome,
                iif(@admitted > 0, concat(N'; ', @admitted, N' diagram procedures that only read admitted'), N'')));
 
 -- 4. The dependency functions answer. find_references, one of the tools of the MCP server, relies on
@@ -155,5 +184,5 @@ from @verdicts
 order by step;
 
 select iif(exists (select 1 from @verdicts where verdict = 'FAIL'),
-           N'FAIL: this login does not match what the server needs, and nothing more.',
+           N'FAIL: this login does not hold exactly what the server needs. The detail of each failed check names what differs.',
            N'PASS: this login reads the definitions, and neither reads nor writes the data.') as conclusion;
